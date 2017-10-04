@@ -44,7 +44,6 @@ public class IterableCodecProvider implements CodecProvider {
      * IterableCodec as a last step when decoding values.
      *
      * @param valueTransformer the value transformer for decoded values
-     * @see org.bson.codecs.DocumentCodec#DocumentCodec(org.bson.codecs.configuration.CodecRegistry, BsonTypeClassMap, org.bson.Transformer)
      */
     public IterableCodecProvider(final Transformer valueTransformer) {
         this(new BsonTypeClassMap(), valueTransformer);

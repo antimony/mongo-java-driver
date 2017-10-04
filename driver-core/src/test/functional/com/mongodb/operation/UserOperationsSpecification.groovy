@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,8 +22,10 @@ import com.mongodb.MongoCredential
 import com.mongodb.MongoNamespace
 import com.mongodb.MongoServerException
 import com.mongodb.MongoTimeoutException
+import com.mongodb.MongoWriteConcernException
 import com.mongodb.OperationFunctionalSpecification
 import com.mongodb.ReadPreference
+import com.mongodb.WriteConcern
 import com.mongodb.async.SingleResultCallback
 import com.mongodb.binding.AsyncConnectionSource
 import com.mongodb.binding.AsyncReadBinding
@@ -59,7 +61,9 @@ import static com.mongodb.ClusterFixture.getBinding
 import static com.mongodb.ClusterFixture.getPrimary
 import static com.mongodb.ClusterFixture.getSslSettings
 import static com.mongodb.ClusterFixture.isAuthenticated
+import static com.mongodb.ClusterFixture.isDiscoverableReplicaSet
 import static com.mongodb.ClusterFixture.isSharded
+import static com.mongodb.ClusterFixture.serverVersionAtLeast
 import static com.mongodb.MongoCredential.createCredential
 import static com.mongodb.WriteConcern.ACKNOWLEDGED
 import static java.util.Arrays.asList
@@ -319,6 +323,32 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
         cluster?.close()
     }
 
+    @IgnoreIf({ !serverVersionAtLeast(3, 4) || !isDiscoverableReplicaSet() })
+    def 'should throw on write concern error when creating a user'() {
+        given:
+        def operation = new CreateUserOperation(credential, false, new WriteConcern(5))
+
+        when:
+        async ? executeAsync(operation) : operation.execute(getBinding())
+
+        then:
+        def ex = thrown(MongoWriteConcernException)
+        ex.code == 100
+
+        when:
+        operation = new UpdateUserOperation(credential, true, new WriteConcern(5))
+        async ? executeAsync(operation) : operation.execute(getBinding())
+
+        then:
+        ex = thrown(MongoWriteConcernException)
+        ex.code == 100
+
+        cleanup:
+        new DropUserOperation(databaseName, credential.userName).execute(getBinding())
+
+        where:
+        async << [true, false]
+    }
 
     def 'should use the ReadBindings readPreference to set slaveOK'() {
         given:
@@ -336,16 +366,8 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
         operation.execute(readBinding)
 
         then:
-        _ * connection.getDescription() >> helper.twoFourConnectionDescription
-        1 * connection.query(_, _, _, _, _, _, readPreference.isSlaveOk(), _, _, _, _, _, _) >>  helper.queryResult
-        1 * connection.release()
-
-        when: '2.6.0'
-        operation.execute(readBinding)
-
-        then:
         _ * connection.getDescription() >> helper.twoSixConnectionDescription
-        1 * connection.command(helper.dbName, _, readPreference.isSlaveOk(), _, _) >> helper.cursorResult
+        1 * connection.command(helper.dbName, _, readPreference, _, _, _) >> helper.cursorResult
 
         where:
         readPreference << [ReadPreference.primary(), ReadPreference.secondary()]
@@ -367,17 +389,9 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
         operation.executeAsync(readBinding, Stub(SingleResultCallback))
 
         then:
-        _ * connection.getDescription() >> helper.twoFourConnectionDescription
-        1 * connection.queryAsync(_, _, _, _, _, _, readPreference.isSlaveOk(), _, _, _, _, _, _, _) >> {
-            it[13].onResult(helper.queryResult, null) }
-
-        when: '2.6.0'
-        operation.executeAsync(readBinding, Stub(SingleResultCallback))
-
-        then:
         _ * connection.getDescription() >> helper.twoSixConnectionDescription
-        1 * connection.commandAsync(helper.dbName, _, readPreference.isSlaveOk(), _, _, _) >> {
-            it[5].onResult(helper.cursorResult, null) }
+        1 * connection.commandAsync(helper.dbName, _, readPreference, _, _, _, _) >> {
+            it[6].onResult(helper.cursorResult, null) }
 
         where:
         readPreference << [ReadPreference.primary(), ReadPreference.secondary()]
@@ -386,9 +400,6 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
     def helper = [
             dbName: 'db',
             namespace: new MongoNamespace('db', 'coll'),
-            twoFourConnectionDescription: Stub(ConnectionDescription) {
-                getServerVersion() >> new ServerVersion([2, 4, 0])
-            },
             twoSixConnectionDescription : Stub(ConnectionDescription) {
                 getServerVersion() >> new ServerVersion([2, 6, 0])
             },
@@ -421,10 +432,10 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
     }
 
     def getCluster(MongoCredential credential, StreamFactory streamFactory, ClusterSettings.Builder builder) {
-        new DefaultClusterFactory().create(builder.hosts(asList(getPrimary())).build(),
+        new DefaultClusterFactory().createCluster(builder.hosts(asList(getPrimary())).build(),
                                            ServerSettings.builder().build(),
                                            ConnectionPoolSettings.builder().maxSize(1).maxWaitQueueSize(1).build(),
-                                           streamFactory, streamFactory, asList(credential), null, null, null)
+                                           streamFactory, streamFactory, asList(credential), null, null, null, [])
     }
 
     def testConnection(Connection connection) {

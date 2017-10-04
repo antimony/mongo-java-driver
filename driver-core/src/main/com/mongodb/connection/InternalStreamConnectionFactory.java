@@ -16,23 +16,33 @@
 
 package com.mongodb.connection;
 
+import com.mongodb.MongoCompressor;
 import com.mongodb.MongoCredential;
-import com.mongodb.event.ConnectionListener;
+import com.mongodb.client.MongoDriverInformation;
+import com.mongodb.event.CommandListener;
+import org.bson.BsonDocument;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import static com.mongodb.assertions.Assertions.notNull;
+import static com.mongodb.connection.ClientMetadataHelper.createClientMetadataDocument;
 
 class InternalStreamConnectionFactory implements InternalConnectionFactory {
     private final StreamFactory streamFactory;
-    private final ConnectionListener connectionListener;
+    private final BsonDocument clientMetadataDocument;
     private final List<Authenticator> authenticators;
+    private final List<MongoCompressor> compressorList;
+    private final CommandListener commandListener;
 
-    public InternalStreamConnectionFactory(final StreamFactory streamFactory, final List<MongoCredential> credentialList,
-                                           final ConnectionListener connectionListener) {
+    InternalStreamConnectionFactory(final StreamFactory streamFactory, final List<MongoCredential> credentialList,
+                                    final String applicationName, final MongoDriverInformation mongoDriverInformation,
+                                    final List<MongoCompressor> compressorList,
+                                    final CommandListener commandListener) {
         this.streamFactory = notNull("streamFactory", streamFactory);
-        this.connectionListener = notNull("connectionListener", connectionListener);
+        this.compressorList = notNull("compressorList", compressorList);
+        this.commandListener = commandListener;
+        this.clientMetadataDocument = createClientMetadataDocument(applicationName, mongoDriverInformation);
         notNull("credentialList", credentialList);
         this.authenticators = new ArrayList<Authenticator>(credentialList.size());
         for (MongoCredential credential : credentialList) {
@@ -42,8 +52,9 @@ class InternalStreamConnectionFactory implements InternalConnectionFactory {
 
     @Override
     public InternalConnection create(final ServerId serverId) {
-        return new InternalStreamConnection(serverId, streamFactory,
-                                            new InternalStreamConnectionInitializer(authenticators), connectionListener);
+        return new InternalStreamConnection(serverId, streamFactory, compressorList, commandListener,
+                                            new InternalStreamConnectionInitializer(authenticators, clientMetadataDocument,
+                                                                                           compressorList));
     }
 
     private Authenticator createAuthenticator(final MongoCredential credential) {

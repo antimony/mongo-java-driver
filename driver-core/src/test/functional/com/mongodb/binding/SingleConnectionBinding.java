@@ -21,6 +21,8 @@ import com.mongodb.connection.Cluster;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.Server;
 import com.mongodb.connection.ServerDescription;
+import com.mongodb.connection.SessionContext;
+import com.mongodb.internal.connection.NoOpSessionContext;
 import com.mongodb.selector.ReadPreferenceServerSelector;
 import com.mongodb.selector.WritableServerSelector;
 
@@ -103,6 +105,11 @@ public class SingleConnectionBinding implements ReadWriteBinding {
     }
 
     @Override
+    public SessionContext getSessionContext() {
+        return NoOpSessionContext.INSTANCE;
+    }
+
+    @Override
     public ConnectionSource getWriteConnectionSource() {
         isTrue("open", getCount() > 0);
         return new SingleConnectionSource(writeServer, writeConnection);
@@ -113,7 +120,7 @@ public class SingleConnectionBinding implements ReadWriteBinding {
         private final Server server;
         private int count = 1;
 
-        public SingleConnectionSource(final Server server, final Connection connection) {
+        SingleConnectionSource(final Server server, final Connection connection) {
             this.server = server;
             this.connection = connection;
             SingleConnectionBinding.this.retain();
@@ -122,6 +129,11 @@ public class SingleConnectionBinding implements ReadWriteBinding {
         @Override
         public ServerDescription getServerDescription() {
             return server.getDescription();
+        }
+
+        @Override
+        public SessionContext getSessionContext() {
+            return NoOpSessionContext.INSTANCE;
         }
 
         @Override

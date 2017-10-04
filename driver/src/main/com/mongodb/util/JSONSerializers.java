@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright 2008-2017 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,16 +21,17 @@ import com.mongodb.Bytes;
 import com.mongodb.DBObject;
 import com.mongodb.DBRef;
 import org.bson.BsonUndefined;
+import org.bson.internal.Base64;
 import org.bson.types.BSONTimestamp;
 import org.bson.types.Binary;
 import org.bson.types.Code;
 import org.bson.types.CodeWScope;
+import org.bson.types.Decimal128;
 import org.bson.types.MaxKey;
 import org.bson.types.MinKey;
 import org.bson.types.ObjectId;
 import org.bson.types.Symbol;
 
-import javax.xml.bind.DatatypeConverter;
 import java.lang.reflect.Array;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -43,7 +44,15 @@ import java.util.regex.Pattern;
 
 /**
  * Defines static methods for getting {@code ObjectSerializer} instances that produce various flavors of JSON.
+ *
+ * @see org.bson.json.JsonReader
+ * @see org.bson.json.JsonWriter
+ * @see com.mongodb.BasicDBObject#toJson()
+ * @see com.mongodb.BasicDBObject#parse(String)
+ *
+ * @deprecated This class has been superseded by to toJson and parse methods on BasicDBObject
  */
+@Deprecated
 public class JSONSerializers {
 
     private JSONSerializers() {
@@ -108,6 +117,7 @@ public class JSONSerializers {
         serializer.addObjectSerializer(Symbol.class, new SymbolSerializer(serializer));
         serializer.addObjectSerializer(UUID.class, new UuidSerializer(serializer));
         serializer.addObjectSerializer(BsonUndefined.class, new UndefinedSerializer(serializer));
+        serializer.addObjectSerializer(Decimal128.class, new Decimal128Serializer(serializer));
         return serializer;
     }
 
@@ -464,7 +474,7 @@ public class JSONSerializers {
 
         protected void serialize(final byte[] bytes, final byte type, final StringBuilder buf) {
             DBObject temp = new BasicDBObject();
-            temp.put("$binary", DatatypeConverter.printBase64Binary(bytes));
+            temp.put("$binary", Base64.encode(bytes));
             temp.put("$type", type);
             serializer.serialize(temp, buf);
         }
@@ -508,5 +518,17 @@ public class JSONSerializers {
             serializer.serialize(temp, buf);
         }
 
+    }
+
+    private static class Decimal128Serializer extends CompoundObjectSerializer {
+
+        Decimal128Serializer(final ObjectSerializer serializer) {
+            super(serializer);
+        }
+
+        @Override
+        public void serialize(final Object obj, final StringBuilder buf) {
+            serializer.serialize(new BasicDBObject("$numberDecimal", obj.toString()), buf);
+        }
     }
 }

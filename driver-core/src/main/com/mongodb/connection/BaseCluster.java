@@ -27,7 +27,6 @@ import com.mongodb.diagnostics.logging.Logger;
 import com.mongodb.diagnostics.logging.Loggers;
 import com.mongodb.event.ClusterClosedEvent;
 import com.mongodb.event.ClusterDescriptionChangedEvent;
-import com.mongodb.event.ClusterEventMulticaster;
 import com.mongodb.event.ClusterListener;
 import com.mongodb.event.ClusterOpeningEvent;
 import com.mongodb.event.ServerListener;
@@ -46,6 +45,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static com.mongodb.assertions.Assertions.isTrue;
 import static com.mongodb.assertions.Assertions.notNull;
+import static com.mongodb.internal.event.EventListenerHelper.createServerListener;
+import static com.mongodb.internal.event.EventListenerHelper.getClusterListener;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -63,17 +64,17 @@ abstract class BaseCluster implements Cluster {
     private final ClusterListener clusterListener;
     private final Deque<ServerSelectionRequest> waitQueue = new ConcurrentLinkedDeque<ServerSelectionRequest>();
     private final AtomicInteger waitQueueSize = new AtomicInteger(0);
+    private final ClusterClock clusterClock = new ClusterClock();
     private Thread waitQueueHandler;
 
     private volatile boolean isClosed;
     private volatile ClusterDescription description;
 
-    public BaseCluster(final ClusterId clusterId, final ClusterSettings settings, final ClusterableServerFactory serverFactory) {
+    BaseCluster(final ClusterId clusterId, final ClusterSettings settings, final ClusterableServerFactory serverFactory) {
         this.clusterId = notNull("clusterId", clusterId);
         this.settings = notNull("settings", settings);
         this.serverFactory = notNull("serverFactory", serverFactory);
-        this.clusterListener = settings.getClusterListeners().isEmpty()
-                                       ? new NoOpClusterListener() : new ClusterEventMulticaster(settings.getClusterListeners());
+        this.clusterListener = getClusterListener(settings);
         clusterListener.clusterOpening(new ClusterOpeningEvent(clusterId));
     }
 
@@ -90,8 +91,8 @@ abstract class BaseCluster implements Cluster {
             boolean selectionFailureLogged = false;
 
             long startTimeNanos = System.nanoTime();
-            long endTimeNanos = startTimeNanos + getUseableTimeoutInNanoseconds();
             long curTimeNanos = startTimeNanos;
+            long maxWaitTimeNanos = getMaxWaitTimeNanos();
 
             while (true) {
                 throwIfIncompatible(curDescription);
@@ -100,7 +101,7 @@ abstract class BaseCluster implements Cluster {
                     return server;
                 }
 
-                if (curTimeNanos > endTimeNanos) {
+                if (curTimeNanos - startTimeNanos > maxWaitTimeNanos) {
                     throw createTimeoutException(serverSelector, curDescription);
                 }
 
@@ -111,7 +112,7 @@ abstract class BaseCluster implements Cluster {
 
                 connect();
 
-                currentPhase.await(Math.min(endTimeNanos - curTimeNanos, getMinWaitTimeNanos()), NANOSECONDS);
+                currentPhase.await(Math.min(maxWaitTimeNanos - (curTimeNanos - startTimeNanos), getMinWaitTimeNanos()), NANOSECONDS);
 
                 curTimeNanos = System.nanoTime();
 
@@ -133,7 +134,7 @@ abstract class BaseCluster implements Cluster {
             LOGGER.trace(String.format("Asynchronously selecting server with selector %s", serverSelector));
         }
         ServerSelectionRequest request = new ServerSelectionRequest(serverSelector, getCompositeServerSelector(serverSelector),
-                                                                    getUseableTimeoutInNanoseconds(), callback);
+                                                                    getMaxWaitTimeNanos(), callback);
 
         CountDownLatch currentPhase = phase.get();
         ClusterDescription currentDescription = description;
@@ -154,12 +155,12 @@ abstract class BaseCluster implements Cluster {
             boolean selectionFailureLogged = false;
 
             long startTimeNanos = System.nanoTime();
-            long endTimeNanos = startTimeNanos + getUseableTimeoutInNanoseconds();
             long curTimeNanos = startTimeNanos;
+            long maxWaitTimeNanos = getMaxWaitTimeNanos();
 
             while (curDescription.getType() == ClusterType.UNKNOWN) {
 
-                if (curTimeNanos > endTimeNanos) {
+                if (curTimeNanos - startTimeNanos > maxWaitTimeNanos) {
                     throw new MongoTimeoutException(format("Timed out after %d ms while waiting to connect. Client view of cluster state "
                                                            + "is %s",
                                                            settings.getServerSelectionTimeout(MILLISECONDS),
@@ -180,9 +181,7 @@ abstract class BaseCluster implements Cluster {
 
                 connect();
 
-                currentPhase.await(Math.min(endTimeNanos - curTimeNanos,
-                                            serverFactory.getSettings().getMinHeartbeatFrequency(NANOSECONDS)),
-                                   NANOSECONDS);
+                currentPhase.await(Math.min(maxWaitTimeNanos - (curTimeNanos - startTimeNanos), getMinWaitTimeNanos()), NANOSECONDS);
 
                 curTimeNanos = System.nanoTime();
 
@@ -191,7 +190,7 @@ abstract class BaseCluster implements Cluster {
             }
             return curDescription;
         } catch (InterruptedException e) {
-            throw new MongoInterruptedException(format("Interrupted while waiting to connect"), e);
+            throw new MongoInterruptedException("Interrupted while waiting to connect", e);
         }
     }
 
@@ -201,6 +200,10 @@ abstract class BaseCluster implements Cluster {
 
     public ClusterSettings getSettings() {
         return settings;
+    }
+
+    public ClusterableServerFactory getServerFactory() {
+        return serverFactory;
     }
 
     protected abstract void connect();
@@ -245,7 +248,7 @@ abstract class BaseCluster implements Cluster {
         return description;
     }
 
-    private long getUseableTimeoutInNanoseconds() {
+    private long getMaxWaitTimeNanos() {
         if (settings.getServerSelectionTimeout(NANOSECONDS) < 0) {
             return Long.MAX_VALUE;
         }
@@ -353,10 +356,8 @@ abstract class BaseCluster implements Cluster {
         return result;
     }
 
-    protected ClusterableServer createServer(final ServerAddress serverAddress,
-                                             final ServerListener serverListener) {
-        ClusterableServer server = serverFactory.create(serverAddress, serverListener);
-        return server;
+    protected ClusterableServer createServer(final ServerAddress serverAddress, final ServerListener serverListener) {
+        return serverFactory.create(serverAddress, createServerListener(serverFactory.getSettings(), serverListener), clusterClock);
     }
 
     private void throwIfIncompatible(final ClusterDescription curDescription) {

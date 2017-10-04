@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,9 +19,11 @@ package com.mongodb.operation;
 import com.mongodb.ExplainVerbosity;
 import com.mongodb.MongoNamespace;
 import com.mongodb.ServerAddress;
+import com.mongodb.WriteConcern;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.binding.AsyncWriteBinding;
 import com.mongodb.binding.WriteBinding;
+import com.mongodb.client.model.Collation;
 import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.ConnectionDescription;
@@ -44,10 +46,14 @@ import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommand
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
 import static com.mongodb.operation.DocumentHelper.putIfNotZero;
 import static com.mongodb.operation.DocumentHelper.putIfTrue;
+import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnection;
 import static com.mongodb.operation.OperationHelper.LOGGER;
+import static com.mongodb.operation.OperationHelper.validateCollation;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
 import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionThreeDotTwo;
 import static com.mongodb.operation.OperationHelper.withConnection;
+import static com.mongodb.operation.WriteConcernHelper.appendWriteConcernToCommand;
+import static com.mongodb.operation.WriteConcernHelper.throwOnWriteConcernError;
 import static java.util.Arrays.asList;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -67,6 +73,7 @@ MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistic
     private final BsonJavaScript mapFunction;
     private final BsonJavaScript reduceFunction;
     private final String collectionName;
+    private final WriteConcern writeConcern;
     private BsonJavaScript finalizeFunction;
     private BsonDocument scope;
     private BsonDocument filter;
@@ -80,6 +87,7 @@ MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistic
     private boolean sharded;
     private boolean nonAtomic;
     private Boolean bypassDocumentValidation;
+    private Collation collation;
     private static final List<String> VALID_ACTIONS = asList("replace", "merge", "reduce");
 
     /**
@@ -93,10 +101,39 @@ MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistic
      */
     public MapReduceToCollectionOperation(final MongoNamespace namespace, final BsonJavaScript mapFunction,
                                           final BsonJavaScript reduceFunction, final String collectionName) {
+        this(namespace, mapFunction, reduceFunction, collectionName, null);
+    }
+
+    /**
+     * Construct a MapReduceOperation with all the criteria it needs to execute
+     *
+     * @param namespace the database and collection namespace for the operation.
+     * @param mapFunction a JavaScript function that associates or "maps" a value with a key and emits the key and value pair.
+     * @param reduceFunction a JavaScript function that "reduces" to a single object all the values associated with a particular key.
+     * @param collectionName the name of the collection to output the results to.
+     * @param writeConcern the write concern
+     * @mongodb.driver.manual core/map-reduce Map Reduce
+     *
+     * @since 3.4
+     */
+    public MapReduceToCollectionOperation(final MongoNamespace namespace, final BsonJavaScript mapFunction,
+                                          final BsonJavaScript reduceFunction, final String collectionName,
+                                          final WriteConcern writeConcern) {
         this.namespace = notNull("namespace", namespace);
         this.mapFunction = notNull("mapFunction", mapFunction);
         this.reduceFunction = notNull("reduceFunction", reduceFunction);
         this.collectionName = notNull("collectionName", collectionName);
+        this.writeConcern = writeConcern;
+    }
+
+    /**
+     * Gets the namespace.
+     *
+     * @return the namespace
+     * @since 3.4
+     */
+    public MongoNamespace getNamespace() {
+        return namespace;
     }
 
     /**
@@ -124,6 +161,17 @@ MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistic
      */
     public String getCollectionName() {
         return collectionName;
+    }
+
+    /**
+     * Gets the write concern.
+     *
+     * @return the write concern, which may be null
+     *
+     * @since 3.4
+     */
+    public WriteConcern getWriteConcern() {
+        return writeConcern;
     }
 
     /**
@@ -426,6 +474,31 @@ MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistic
     }
 
     /**
+     * Returns the collation options
+     *
+     * @return the collation options
+     * @since 3.4
+     * @mongodb.server.release 3.4
+     */
+    public Collation getCollation() {
+        return collation;
+    }
+
+    /**
+     * Sets the collation options
+     *
+     * <p>A null value represents the server default.</p>
+     * @param collation the collation options to use
+     * @return this
+     * @since 3.4
+     * @mongodb.server.release 3.4
+     */
+    public MapReduceToCollectionOperation collation(final Collation collation) {
+        this.collation = collation;
+        return this;
+    }
+
+    /**
      * Executing this will return a cursor with your results in.
      *
      * @param binding the binding
@@ -436,6 +509,7 @@ MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistic
         return withConnection(binding, new OperationHelper.CallableWithConnection<MapReduceStatistics>() {
             @Override
             public MapReduceStatistics call(final Connection connection) {
+                validateCollation(connection, collation);
                 return executeWrappedCommandProtocol(binding, namespace.getDatabaseName(), getCommand(connection.getDescription()),
                         connection, transformer());
             }
@@ -444,15 +518,25 @@ MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistic
 
     @Override
     public void executeAsync(final AsyncWriteBinding binding, final SingleResultCallback<MapReduceStatistics> callback) {
-        withConnection(binding, new OperationHelper.AsyncCallableWithConnection() {
+        withConnection(binding, new AsyncCallableWithConnection() {
             @Override
             public void call(final AsyncConnection connection, final Throwable t) {
                 SingleResultCallback<MapReduceStatistics> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
                     errHandlingCallback.onResult(null, t);
                 } else {
-                    executeWrappedCommandProtocolAsync(binding, namespace.getDatabaseName(), getCommand(connection.getDescription()),
-                            connection, transformer(), releasingCallback(errHandlingCallback, connection));
+                    final SingleResultCallback<MapReduceStatistics> wrappedCallback = releasingCallback(errHandlingCallback, connection);
+                    validateCollation(connection, collation, new AsyncCallableWithConnection() {
+                        @Override
+                        public void call(final AsyncConnection connection, final Throwable t) {
+                            if (t != null) {
+                                wrappedCallback.onResult(null, t);
+                            } else {
+                                executeWrappedCommandProtocolAsync(binding, namespace.getDatabaseName(),
+                                        getCommand(connection.getDescription()), connection, transformer(), wrappedCallback);
+                            }
+                        }
+                    });
                 }
             }
         });
@@ -489,6 +573,7 @@ MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistic
             @SuppressWarnings("unchecked")
             @Override
             public MapReduceStatistics apply(final BsonDocument result, final ServerAddress serverAddress) {
+                throwOnWriteConcernError(result, serverAddress);
                 return MapReduceHelper.createStatistics(result);
             }
         };
@@ -501,7 +586,6 @@ MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistic
         if (getDatabaseName() != null) {
             outputDocument.put("db", new BsonString(getDatabaseName()));
         }
-
         BsonDocument commandDocument = new BsonDocument("mapreduce", new BsonString(namespace.getCollectionName()))
                                            .append("map", getMapFunction())
                                            .append("reduce", getReduceFunction())
@@ -516,6 +600,12 @@ MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistic
         putIfTrue(commandDocument, "jsMode", isJsMode());
         if (bypassDocumentValidation != null && description != null && serverIsAtLeastVersionThreeDotTwo(description)) {
             commandDocument.put("bypassDocumentValidation", BsonBoolean.valueOf(bypassDocumentValidation));
+        }
+        if (description != null) {
+            appendWriteConcernToCommand(writeConcern, commandDocument, description);
+        }
+        if (collation != null) {
+            commandDocument.put("collation", collation.asDocument());
         }
         return commandDocument;
     }

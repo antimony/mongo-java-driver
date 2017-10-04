@@ -21,7 +21,7 @@ import com.mongodb.MongoNamespace;
 import com.mongodb.async.client.DatabaseTestCase;
 import com.mongodb.async.client.Fixture;
 import com.mongodb.async.client.MongoCollection;
-import com.mongodb.client.gridfs.model.GridFSDownloadByNameOptions;
+import com.mongodb.client.gridfs.model.GridFSDownloadOptions;
 import com.mongodb.client.gridfs.model.GridFSUploadOptions;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
@@ -38,9 +38,9 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
+import util.Hex;
 import util.JsonPoweredTestHelper;
 
-import javax.xml.bind.DatatypeConverter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -54,7 +54,6 @@ import java.util.List;
 import static com.mongodb.ClusterFixture.getDefaultDatabaseName;
 import static com.mongodb.async.client.gridfs.helpers.AsyncStreamHelper.toAsyncInputStream;
 import static com.mongodb.async.client.gridfs.helpers.AsyncStreamHelper.toAsyncOutputStream;
-import static javax.xml.bind.DatatypeConverter.printHexBinary;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -279,7 +278,7 @@ public class GridFSTest extends DatabaseTestCase {
 
         if (assertion.containsKey("result")) {
             assertNull("Should not have thrown an exception", error);
-            assertEquals(printHexBinary(outputStream.toByteArray()).toLowerCase(),
+            assertEquals(Hex.encode(outputStream.toByteArray()).toLowerCase(),
                     assertion.getDocument("result").getString("$hex").getValue());
         } else if (assertion.containsKey("error")) {
             assertNotNull("Should have thrown an exception", error);
@@ -291,7 +290,7 @@ public class GridFSTest extends DatabaseTestCase {
         final ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 
         try {
-            final GridFSDownloadByNameOptions options = new GridFSDownloadByNameOptions();
+            final GridFSDownloadOptions options = new GridFSDownloadOptions();
             if (arguments.containsKey("options")) {
                 int revision = arguments.getDocument("options").getInt32("revision").getValue();
                 options.revision(revision);
@@ -300,7 +299,7 @@ public class GridFSTest extends DatabaseTestCase {
             new MongoOperation<Long>() {
                 @Override
                 public void execute() {
-                    gridFSBucket.downloadToStreamByName(arguments.getString("filename").getValue(), toAsyncOutputStream(outputStream),
+                    gridFSBucket.downloadToStream(arguments.getString("filename").getValue(), toAsyncOutputStream(outputStream),
                             options, getCallback());
                 }
             }.get();
@@ -311,7 +310,7 @@ public class GridFSTest extends DatabaseTestCase {
         }
         if (assertion.containsKey("result")) {
             assertNull("Should not have thrown an exception", error);
-            assertEquals(printHexBinary(outputStream.toByteArray()).toLowerCase(),
+            assertEquals(Hex.encode(outputStream.toByteArray()).toLowerCase(),
                     assertion.getDocument("result").getString("$hex").getValue());
         } else if (assertion.containsKey("error")) {
             assertNotNull("Should have thrown an exception", error);
@@ -455,7 +454,7 @@ public class GridFSTest extends DatabaseTestCase {
 
     private BsonDocument parseHexDocument(final BsonDocument document, final String hexDocument) {
         if (document.containsKey(hexDocument) && document.get(hexDocument).isDocument()) {
-            byte[] bytes = DatatypeConverter.parseHexBinary(document.getDocument(hexDocument).getString("$hex").getValue());
+            byte[] bytes = Hex.decode(document.getDocument(hexDocument).getString("$hex").getValue());
             document.put(hexDocument, new BsonBinary(bytes));
         }
         return document;

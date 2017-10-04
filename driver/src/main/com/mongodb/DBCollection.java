@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2015 MongoDB, Inc.
+ * Copyright (c) 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,12 @@ import com.mongodb.bulk.DeleteRequest;
 import com.mongodb.bulk.IndexRequest;
 import com.mongodb.bulk.InsertRequest;
 import com.mongodb.bulk.UpdateRequest;
+import com.mongodb.client.model.DBCollectionCountOptions;
+import com.mongodb.client.model.DBCollectionDistinctOptions;
+import com.mongodb.client.model.DBCollectionFindAndModifyOptions;
+import com.mongodb.client.model.DBCollectionFindOptions;
+import com.mongodb.client.model.DBCollectionRemoveOptions;
+import com.mongodb.client.model.DBCollectionUpdateOptions;
 import com.mongodb.connection.BufferProvider;
 import com.mongodb.operation.AggregateOperation;
 import com.mongodb.operation.AggregateToCollectionOperation;
@@ -35,7 +41,6 @@ import com.mongodb.operation.DropIndexOperation;
 import com.mongodb.operation.FindAndDeleteOperation;
 import com.mongodb.operation.FindAndReplaceOperation;
 import com.mongodb.operation.FindAndUpdateOperation;
-import com.mongodb.operation.FindOperation;
 import com.mongodb.operation.InsertOperation;
 import com.mongodb.operation.ListIndexesOperation;
 import com.mongodb.operation.MapReduceBatchCursor;
@@ -43,8 +48,8 @@ import com.mongodb.operation.MapReduceStatistics;
 import com.mongodb.operation.MapReduceToCollectionOperation;
 import com.mongodb.operation.MapReduceWithInlineResultsOperation;
 import com.mongodb.operation.MixedBulkWriteOperation;
-import com.mongodb.operation.OperationExecutor;
 import com.mongodb.operation.ParallelCollectionScanOperation;
+import com.mongodb.operation.ReadOperation;
 import com.mongodb.operation.RenameCollectionOperation;
 import com.mongodb.operation.UpdateOperation;
 import com.mongodb.operation.WriteOperation;
@@ -68,14 +73,15 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static com.mongodb.AggregationOptions.OutputMode.CURSOR;
-import static com.mongodb.AggregationOptions.OutputMode.INLINE;
 import static com.mongodb.BulkWriteHelper.translateBulkWriteResult;
 import static com.mongodb.BulkWriteHelper.translateWriteRequestsToNew;
+import static com.mongodb.MongoNamespace.checkCollectionNameValidity;
 import static com.mongodb.ReadPreference.primary;
 import static com.mongodb.ReadPreference.primaryPreferred;
+import static com.mongodb.assertions.Assertions.notNull;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
+import static java.util.Collections.singletonList;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
@@ -135,6 +141,7 @@ public class DBCollection {
      * @param database      the database to which this collections belongs to
      */
     DBCollection(final String name, final DB database, final OperationExecutor executor) {
+        checkCollectionNameValidity(name);
         this.name = name;
         this.database = database;
         this.executor = executor;
@@ -449,10 +456,9 @@ public class DBCollection {
      * @throws MongoException if the operation failed for some other reason
      * @mongodb.driver.manual tutorial/modify-documents/ Modify Documents
      */
-    @SuppressWarnings("unchecked")
     public WriteResult update(final DBObject query, final DBObject update, final boolean upsert, final boolean multi,
                               final WriteConcern concern, final DBEncoder encoder) {
-        return updateImpl(query, update, upsert, multi, concern, null, encoder);
+        return update(query, update, upsert, multi, concern, null, encoder);
     }
 
     /**
@@ -474,35 +480,10 @@ public class DBCollection {
      * @since 2.14
      */
     public WriteResult update(final DBObject query, final DBObject update, final boolean upsert, final boolean multi,
-                              final WriteConcern concern, final boolean bypassDocumentValidation, final DBEncoder encoder) {
-        return updateImpl(query, update, upsert, multi, concern, bypassDocumentValidation, encoder);
+                              final WriteConcern concern, final Boolean bypassDocumentValidation, final DBEncoder encoder) {
+        return update(query, update, new DBCollectionUpdateOptions().upsert(upsert).multi(multi)
+                .writeConcern(concern).bypassDocumentValidation(bypassDocumentValidation).encoder(encoder));
     }
-
-    private WriteResult updateImpl(final DBObject query, final DBObject update, final boolean upsert, final boolean multi,
-                                   final WriteConcern concern, final Boolean bypassDocumentValidation, final DBEncoder encoder) {
-        if (update == null) {
-            throw new IllegalArgumentException("update can not be null");
-        }
-
-        if (query == null) {
-            throw new IllegalArgumentException("update query can not be null");
-        }
-
-        if (!update.keySet().isEmpty() && update.keySet().iterator().next().startsWith("$")) {
-            UpdateRequest updateRequest = new UpdateRequest(wrap(query), wrap(update, encoder),
-                                                            com.mongodb.bulk.WriteRequest.Type.UPDATE).upsert(upsert).multi(multi);
-
-            return executeWriteOperation(new UpdateOperation(getNamespace(), false, concern, asList(updateRequest))
-                                         .bypassDocumentValidation(bypassDocumentValidation));
-        } else {
-            UpdateRequest replaceRequest = new UpdateRequest(wrap(query), wrap(update, encoder),
-                                                             com.mongodb.bulk.WriteRequest.Type.REPLACE)
-                                           .upsert(upsert);
-            return executeWriteOperation(new UpdateOperation(getNamespace(), true, concern, asList(replaceRequest))
-                                         .bypassDocumentValidation(bypassDocumentValidation));
-        }
-    }
-
 
     /**
      * Modify an existing document or documents in collection. The query parameter employs the same query selectors, as used in {@code
@@ -553,6 +534,40 @@ public class DBCollection {
     }
 
     /**
+     * Modify an existing document or documents in collection.
+     *
+     * @param query the selection criteria for the update
+     * @param update the modifications to apply
+     * @param options the options to apply to the update operation
+     * @return the result of the operation
+     * @throws com.mongodb.DuplicateKeyException if the write failed to a duplicate unique key
+     * @throws com.mongodb.WriteConcernException if the write failed due some other failure specific to the update command
+     * @throws MongoException if the operation failed for some other reason
+     * @mongodb.driver.manual tutorial/modify-documents/ Modify
+     * @since 3.4
+     */
+    public WriteResult update(final DBObject query, final DBObject update, final DBCollectionUpdateOptions options) {
+        notNull("query", query);
+        notNull("update", update);
+        notNull("options", options);
+        WriteConcern writeConcern = options.getWriteConcern() != null ? options.getWriteConcern() : getWriteConcern();
+
+        if (!update.keySet().isEmpty() && update.keySet().iterator().next().startsWith("$")) {
+            UpdateRequest updateRequest = new UpdateRequest(wrap(query), wrap(update, options.getEncoder()),
+                    com.mongodb.bulk.WriteRequest.Type.UPDATE).upsert(options.isUpsert()).multi(options.isMulti())
+                    .collation(options.getCollation());
+            return executeWriteOperation(new UpdateOperation(getNamespace(), false, writeConcern, singletonList(updateRequest))
+                    .bypassDocumentValidation(options.getBypassDocumentValidation()));
+        } else {
+            UpdateRequest replaceRequest = new UpdateRequest(wrap(query), wrap(update, options.getEncoder()),
+                    com.mongodb.bulk.WriteRequest.Type.REPLACE).upsert(options.isUpsert()).multi(options.isMulti())
+                    .collation(options.getCollation());
+            return executeWriteOperation(new UpdateOperation(getNamespace(), true, writeConcern, singletonList(replaceRequest))
+                    .bypassDocumentValidation(options.getBypassDocumentValidation()));
+        }
+    }
+
+    /**
      * Remove documents from a collection.
      *
      * @param query the deletion criteria using query operators. Omit the query parameter or pass an empty document to delete all documents
@@ -578,7 +593,7 @@ public class DBCollection {
      * @mongodb.driver.manual tutorial/remove-documents/ Remove Documents
      */
     public WriteResult remove(final DBObject query, final WriteConcern writeConcern) {
-        return executeWriteOperation(new DeleteOperation(getNamespace(), false, writeConcern, asList(new DeleteRequest(wrap(query)))));
+        return remove(query, new DBCollectionRemoveOptions().writeConcern(writeConcern));
     }
 
     /**
@@ -594,9 +609,27 @@ public class DBCollection {
      * @mongodb.driver.manual tutorial/remove-documents/ Remove Documents
      */
     public WriteResult remove(final DBObject query, final WriteConcern writeConcern, final DBEncoder encoder) {
-        DeleteRequest deleteRequest = new DeleteRequest(wrap(query, encoder));
+        return remove(query, new DBCollectionRemoveOptions().writeConcern(writeConcern).encoder(encoder));
+    }
 
-        return executeWriteOperation(new DeleteOperation(getNamespace(), false, writeConcern, asList(deleteRequest)));
+    /**
+     * Remove documents from a collection.
+     *
+     * @param query   the deletion criteria using query operators. Omit the query parameter or pass an empty document to delete all
+     *                documents in the collection.
+     * @param options the options to apply to the delete operation
+     * @return the result of the operation
+     * @throws com.mongodb.WriteConcernException if the write failed due some other failure specific to the delete command
+     * @throws MongoException if the operation failed for some other reason
+     * @mongodb.driver.manual tutorial/remove-documents/ Remove Documents
+     * @since 3.4
+     */
+    public WriteResult remove(final DBObject query, final DBCollectionRemoveOptions options) {
+        notNull("query", query);
+        notNull("options", options);
+        WriteConcern writeConcern = options.getWriteConcern() != null ? options.getWriteConcern() : getWriteConcern();
+        DeleteRequest deleteRequest = new DeleteRequest(wrap(query, options.getEncoder())).collation(options.getCollation());
+        return executeWriteOperation(new DeleteOperation(getNamespace(), false, writeConcern, singletonList(deleteRequest)));
     }
 
     /**
@@ -674,6 +707,20 @@ public class DBCollection {
     }
 
     /**
+     * Select documents in collection and get a cursor to the selected documents.
+     *
+     * @param query         the selection criteria using query operators. Omit the query parameter or pass an empty document to return all
+     *                      documents in the collection.
+     * @param options       the options for the find operation.
+     * @return A cursor to the documents that match the query criteria
+     * @mongodb.driver.manual tutorial/query-documents/ Querying
+     * @since 3.4
+     */
+    public DBCursor find(final DBObject query, final DBCollectionFindOptions options) {
+        return new DBCursor(this, query, options);
+    }
+
+    /**
      * Get a single document from collection.
      *
      * @return A document that satisfies the query specified as the argument to this method.
@@ -744,38 +791,8 @@ public class DBCollection {
      */
     public DBObject findOne(final DBObject query, final DBObject projection, final DBObject sort,
                             final ReadPreference readPreference) {
-        return findOne(query, projection, sort, readPreference, getReadConcern(), 0, MILLISECONDS);
-    }
-
-    /**
-     * Get a single document from collection.
-     *
-     * @param query          the selection criteria using query operators.
-     * @param projection     specifies which projection MongoDB will return from the documents in the result set.
-     * @param sort           A document whose fields specify the attributes on which to sort the result set.
-     * @param readPreference {@code ReadPreference} to be used for this operation
-     * @param readConcern    {@code ReadConcern} to be used for this operation
-     * @param maxTime        the maximum time that the server will allow this operation to execute before killing it
-     * @param maxTimeUnit    the unit that maxTime is specified in
-     * @return A document that satisfies the query specified as the argument to this method.
-     * @mongodb.driver.manual tutorial/query-documents/ Querying
-     * @since 2.12.0
-     */
-    DBObject findOne(final DBObject query, final DBObject projection, final DBObject sort,
-                     final ReadPreference readPreference, final ReadConcern readConcern,
-                     final long maxTime, final TimeUnit maxTimeUnit) {
-        FindOperation<DBObject> operation = new FindOperation<DBObject>(getNamespace(),
-                                                                            objectCodec)
-                                                    .readConcern(readConcern)
-                                                    .projection(wrapAllowNull(projection))
-                                                    .sort(wrapAllowNull(sort))
-                                                    .limit(-1)
-                                                    .maxTime(maxTime, maxTimeUnit);
-        if (query != null) {
-            operation.filter(wrap(query));
-        }
-        BatchCursor<DBObject> cursor = executor.execute(operation, readPreference);
-        return cursor.hasNext() ? cursor.next().iterator().next() : null;
+        return findOne(query != null ? query : new BasicDBObject(),
+                new DBCollectionFindOptions().projection(projection).sort(sort).readPreference(readPreference));
     }
 
     /**
@@ -786,7 +803,7 @@ public class DBCollection {
      * @mongodb.driver.manual tutorial/query-documents/ Querying
      */
     public DBObject findOne(final Object id) {
-        return findOne(id, null);
+        return findOne(new BasicDBObject("_id", id), new DBCollectionFindOptions());
     }
 
     /**
@@ -798,7 +815,20 @@ public class DBCollection {
      * @mongodb.driver.manual tutorial/query-documents/ Querying
      */
     public DBObject findOne(final Object id, final DBObject projection) {
-        return findOne(new BasicDBObject("_id", id), projection);
+        return findOne(new BasicDBObject("_id", id), new DBCollectionFindOptions().projection(projection));
+    }
+
+    /**
+     * Get a single document from collection.
+     *
+     * @param query          the selection criteria using query operators.
+     * @param findOptions    the options for the find operation.
+     * @return A document that satisfies the query specified as the argument to this method.
+     * @mongodb.driver.manual tutorial/query-documents/ Querying
+     * @since 3.4
+     */
+    public DBObject findOne(final DBObject query, final DBCollectionFindOptions findOptions) {
+        return find(query, findOptions).one();
     }
 
     /**
@@ -809,7 +839,7 @@ public class DBCollection {
      * @mongodb.driver.manual reference/command/count/ Count
      */
     public long count() {
-        return getCount(new BasicDBObject(), null);
+        return getCount(new BasicDBObject(), new DBCollectionCountOptions());
     }
 
     /**
@@ -821,7 +851,7 @@ public class DBCollection {
      * @mongodb.driver.manual reference/command/count/ Count
      */
     public long count(final DBObject query) {
-        return getCount(query, null);
+        return getCount(query, new DBCollectionCountOptions());
     }
 
     /**
@@ -838,6 +868,20 @@ public class DBCollection {
     }
 
     /**
+     * Get the count of documents in collection that would match a criteria.
+     *
+     * @param query     specifies the selection criteria
+     * @param options   the options for the count operation.
+     * @return the number of documents that matches selection criteria
+     * @throws MongoException if the operation failed
+     * @mongodb.driver.manual reference/command/count/ Count
+     * @since 3.4
+     */
+    public long count(final DBObject query, final DBCollectionCountOptions options) {
+        return getCount(query, options);
+    }
+
+    /**
      * Get the count of documents in collection.
      *
      * @return the number of documents in collection
@@ -845,7 +889,7 @@ public class DBCollection {
      * @mongodb.driver.manual reference/command/count/ Count
      */
     public long getCount() {
-        return getCount(new BasicDBObject(), null);
+        return getCount(new BasicDBObject(), new DBCollectionCountOptions());
     }
 
     /**
@@ -869,7 +913,7 @@ public class DBCollection {
      * @mongodb.driver.manual reference/command/count/ Count
      */
     public long getCount(final DBObject query) {
-        return getCount(query, null);
+        return getCount(query, new DBCollectionCountOptions());
     }
 
     /**
@@ -928,38 +972,36 @@ public class DBCollection {
      */
     public long getCount(final DBObject query, final DBObject projection, final long limit, final long skip,
                          final ReadPreference readPreference) {
-        return getCount(query, limit, skip, readPreference, getReadConcern(), 0, MILLISECONDS);
+        return getCount(query, new DBCollectionCountOptions().limit(limit).skip(skip).readPreference(readPreference));
     }
 
-    long getCount(final DBObject query, final long limit, final long skip,
-                  final ReadPreference readPreference, final ReadConcern readConcern,
-                  final long maxTime, final TimeUnit maxTimeUnit) {
-        return getCount(query, limit, skip, readPreference, readConcern, maxTime, maxTimeUnit, null);
-    }
-
-    long getCount(final DBObject query, final long limit, final long skip,
-                  final ReadPreference readPreference, final ReadConcern readConcern,
-                  final long maxTime, final TimeUnit maxTimeUnit,
-                  final BsonValue hint) {
-
-        if (limit > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("limit is too large: " + limit);
-        }
-
-        if (skip > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("skip is too large: " + skip);
-        }
-
+    /**
+     * Get the count of documents in collection that would match a criteria.
+     *
+     * @param query     specifies the selection criteria
+     * @param options   the options for the count operation.
+     * @return the number of documents that matches selection criteria
+     * @throws MongoException if the operation failed
+     * @mongodb.driver.manual reference/command/count/ Count
+     * @since 3.4
+     */
+    public long getCount(final DBObject query, final DBCollectionCountOptions options) {
+        notNull("countOptions", options);
         CountOperation operation = new CountOperation(getNamespace())
-                                       .readConcern(readConcern)
-                                       .hint(hint)
-                                       .skip(skip)
-                                       .limit(limit)
-                                       .maxTime(maxTime, maxTimeUnit);
+                                       .readConcern(options.getReadConcern() != null ? options.getReadConcern() : getReadConcern())
+                                       .skip(options.getSkip())
+                                       .limit(options.getLimit())
+                                       .maxTime(options.getMaxTime(MILLISECONDS), MILLISECONDS)
+                                       .collation(options.getCollation());
         if (query != null) {
             operation.filter(wrap(query));
         }
-        return executor.execute(operation, readPreference);
+        if (options.getHint() != null) {
+            operation.hint(wrap(options.getHint()));
+        } else if (options.getHintString() != null) {
+            operation.hint(new BsonString(options.getHintString()));
+        }
+        return executor.execute(operation, options.getReadPreference() != null ? options.getReadPreference() : getReadPreference());
     }
 
     /**
@@ -984,10 +1026,14 @@ public class DBCollection {
      * @mongodb.driver.manual reference/command/renameCollection/ Rename Collection
      */
     public DBCollection rename(final String newName, final boolean dropTarget) {
-        executor.execute(new RenameCollectionOperation(getNamespace(),
-                                                       new MongoNamespace(getNamespace().getDatabaseName(),
-                                                                          newName)).dropTarget(dropTarget));
-        return getDB().getCollection(newName);
+        try {
+            executor.execute(new RenameCollectionOperation(getNamespace(),
+                                                           new MongoNamespace(getNamespace().getDatabaseName(), newName), getWriteConcern())
+                                     .dropTarget(dropTarget));
+            return getDB().getCollection(newName);
+        } catch (MongoWriteConcernException e) {
+            throw createWriteConcernException(e);
+        }
     }
 
     /**
@@ -1109,15 +1155,38 @@ public class DBCollection {
      * @return A {@code List} of the distinct values
      * @mongodb.driver.manual reference/command/distinct Distinct Command
      */
-    @SuppressWarnings("unchecked")
     public List distinct(final String fieldName, final DBObject query, final ReadPreference readPreference) {
-        return new OperationIterable<BsonValue>(new DistinctOperation<BsonValue>(getNamespace(), fieldName,
-                                                new BsonValueCodec())
-                                                .readConcern(getReadConcern())
-                                                .filter(wrap(query)),
-                                                readPreference, executor).map(new Function<BsonValue, Object>() {
+        return distinct(fieldName, new DBCollectionDistinctOptions().filter(query).readPreference(readPreference));
+    }
+
+    /**
+     * Find the distinct values for a specified field across a collection and returns the results in an array.
+     *
+     * @param fieldName  Specifies the field for which to return the distinct values
+     * @param options    the options to apply for this operation
+     * @return A {@code List} of the distinct values
+     * @mongodb.driver.manual reference/command/distinct Distinct Command
+     * @since 3.4
+     */
+    @SuppressWarnings("unchecked")
+    public List distinct(final String fieldName, final DBCollectionDistinctOptions options) {
+        notNull("fieldName", fieldName);
+        return new MongoIterableImpl<BsonValue>(null, executor,
+                                                  options.getReadConcern() != null ? options.getReadConcern() : getReadConcern(),
+                                                  options.getReadPreference() != null ? options.getReadPreference() : getReadPreference()) {
+            @Override
+            ReadOperation<BatchCursor<BsonValue>> asReadOperation() {
+                return new DistinctOperation<BsonValue>(getNamespace(), fieldName, new BsonValueCodec())
+                               .readConcern(super.getReadConcern())
+                               .filter(wrapAllowNull(options.getFilter()))
+                               .collation(options.getCollation());
+            }
+        }.map(new Function<BsonValue, Object>() {
             @Override
             public Object apply(final BsonValue bsonValue) {
+                if (bsonValue == null) {
+                    return null;
+                }
                 BsonDocument document = new BsonDocument("value", bsonValue);
                 DBObject obj = getDefaultDBObjectCodec().decode(new BsonDocumentReader(document), DecoderContext.builder().build());
                 return obj.get("value");
@@ -1191,17 +1260,16 @@ public class DBCollection {
         if (command.getOutputType() == MapReduceCommand.OutputType.INLINE) {
 
             MapReduceWithInlineResultsOperation<DBObject> operation =
-                new MapReduceWithInlineResultsOperation<DBObject>(getNamespace(),
-                                                                  new BsonJavaScript(command.getMap()),
-                                                                  new BsonJavaScript(command.getReduce()),
-                                                                  getDefaultDBObjectCodec());
-            operation.readConcern(getReadConcern());
-            operation.filter(wrapAllowNull(command.getQuery()));
-            operation.limit(command.getLimit());
-            operation.maxTime(command.getMaxTime(MILLISECONDS), MILLISECONDS);
-            operation.jsMode(command.getJsMode() == null ? false : command.getJsMode());
-            operation.sort(wrapAllowNull(command.getSort()));
-            operation.verbose(command.isVerbose());
+                    new MapReduceWithInlineResultsOperation<DBObject>(getNamespace(), new BsonJavaScript(command.getMap()),
+                            new BsonJavaScript(command.getReduce()), getDefaultDBObjectCodec())
+                            .readConcern(getReadConcern())
+                            .filter(wrapAllowNull(command.getQuery()))
+                            .limit(command.getLimit())
+                            .maxTime(command.getMaxTime(MILLISECONDS), MILLISECONDS)
+                            .jsMode(command.getJsMode() == null ? false : command.getJsMode())
+                            .sort(wrapAllowNull(command.getSort()))
+                            .verbose(command.isVerbose())
+                            .collation(command.getCollation());
 
             if (command.getScope() != null) {
                 operation.scope(wrap(new BasicDBObject(command.getScope())));
@@ -1231,7 +1299,8 @@ public class DBCollection {
                 new MapReduceToCollectionOperation(getNamespace(),
                                                    new BsonJavaScript(command.getMap()),
                                                    new BsonJavaScript(command.getReduce()),
-                                                   command.getOutputTarget())
+                                                   command.getOutputTarget(),
+                                                   getWriteConcern())
                     .filter(wrapAllowNull(command.getQuery()))
                     .limit(command.getLimit())
                     .maxTime(command.getMaxTime(MILLISECONDS), MILLISECONDS)
@@ -1240,7 +1309,8 @@ public class DBCollection {
                     .verbose(command.isVerbose())
                     .action(action)
                     .databaseName(command.getOutputDB())
-                    .bypassDocumentValidation(command.getBypassDocumentValidation());
+                    .bypassDocumentValidation(command.getBypassDocumentValidation())
+                    .collation(command.getCollation());
 
             if (command.getScope() != null) {
                 operation.scope(wrap(new BasicDBObject(command.getScope())));
@@ -1248,10 +1318,14 @@ public class DBCollection {
             if (command.getFinalize() != null) {
                 operation.finalizeFunction(new BsonJavaScript(command.getFinalize()));
             }
-            MapReduceStatistics mapReduceStatistics = executor.execute(operation);
-            DBCollection mapReduceOutputCollection = getMapReduceOutputCollection(command);
-            DBCursor executionResult = mapReduceOutputCollection.find();
-            return new MapReduceOutput(command.toDBObject(), executionResult, mapReduceStatistics, mapReduceOutputCollection);
+            try {
+                MapReduceStatistics mapReduceStatistics = executor.execute(operation);
+                DBCollection mapReduceOutputCollection = getMapReduceOutputCollection(command);
+                DBCursor executionResult = mapReduceOutputCollection.find();
+                return new MapReduceOutput(command.toDBObject(), executionResult, mapReduceStatistics, mapReduceOutputCollection);
+            } catch (MongoWriteConcernException e) {
+                throw createWriteConcernException(e);
+            }
         }
     }
 
@@ -1271,7 +1345,7 @@ public class DBCollection {
      * @return the aggregation operation's result set
      * @mongodb.driver.manual core/aggregation-pipeline/ Aggregation
      * @mongodb.server.release 2.2
-     * @deprecated Use {@link com.mongodb.DBCollection#aggregate(java.util.List)} instead
+     * @deprecated Use {@link #aggregate(List, AggregationOptions)} instead
      */
     @Deprecated
     @SuppressWarnings("unchecked")
@@ -1289,7 +1363,9 @@ public class DBCollection {
      * @return the aggregation's result set
      * @mongodb.driver.manual core/aggregation-pipeline/ Aggregation
      * @mongodb.server.release 2.2
+     * @deprecated Use {@link #aggregate(List, AggregationOptions)} instead
      */
+    @Deprecated
     public AggregationOutput aggregate(final List<? extends DBObject> pipeline) {
         return aggregate(pipeline, getReadPreference());
     }
@@ -1302,10 +1378,12 @@ public class DBCollection {
      * @return the aggregation's result set
      * @mongodb.driver.manual core/aggregation-pipeline/ Aggregation
      * @mongodb.server.release 2.2
+     * @deprecated Use {@link #aggregate(List, AggregationOptions, ReadPreference)} )} instead
      */
+    @Deprecated
     @SuppressWarnings("unchecked")
     public AggregationOutput aggregate(final List<? extends DBObject> pipeline, final ReadPreference readPreference) {
-        Cursor cursor = aggregate(pipeline, AggregationOptions.builder().outputMode(INLINE).build(), readPreference, false);
+        Cursor cursor = aggregate(pipeline, AggregationOptions.builder().build(), readPreference, false);
 
         if (cursor == null) {
             return new AggregationOutput(Collections.<DBObject>emptyList());
@@ -1315,7 +1393,6 @@ public class DBCollection {
                 results.add(cursor.next());
             }
             return new AggregationOutput(results);
-
         }
     }
 
@@ -1347,6 +1424,7 @@ public class DBCollection {
         return aggregate(pipeline, options, readPreference, true);
     }
 
+    @SuppressWarnings("deprecation")
     private Cursor aggregate(final List<? extends DBObject> pipeline, final AggregationOptions options, final ReadPreference readPreference,
                              final boolean returnCursorForOutCollection) {
         if (options == null) {
@@ -1357,23 +1435,30 @@ public class DBCollection {
         BsonValue outCollection = stages.get(stages.size() - 1).get("$out");
 
         if (outCollection != null) {
-            AggregateToCollectionOperation operation = new AggregateToCollectionOperation(getNamespace(), stages)
+            AggregateToCollectionOperation operation = new AggregateToCollectionOperation(getNamespace(), stages, getWriteConcern())
                                                        .maxTime(options.getMaxTime(MILLISECONDS), MILLISECONDS)
                                                        .allowDiskUse(options.getAllowDiskUse())
-                                                       .bypassDocumentValidation(options.getBypassDocumentValidation());
-            executor.execute(operation);
-            if (returnCursorForOutCollection) {
-                return new DBCursor(database.getCollection(outCollection.asString().getValue()), new BasicDBObject(), null, primary());
-            } else {
-                return null;
+                                                       .bypassDocumentValidation(options.getBypassDocumentValidation())
+                                                       .collation(options.getCollation());
+            try {
+                executor.execute(operation);
+                if (returnCursorForOutCollection) {
+                    return new DBCursor(database.getCollection(outCollection.asString().getValue()), new BasicDBObject(),
+                            new DBCollectionFindOptions().readPreference(primary()).collation(options.getCollation()));
+                } else {
+                    return null;
+                }
+            } catch (MongoWriteConcernException e) {
+                throw createWriteConcernException(e);
             }
         } else {
             AggregateOperation<DBObject> operation = new AggregateOperation<DBObject>(getNamespace(), stages, getDefaultDBObjectCodec())
-                                                         .readConcern(getReadConcern())
-                                                         .maxTime(options.getMaxTime(MILLISECONDS), MILLISECONDS)
-                                                         .allowDiskUse(options.getAllowDiskUse())
-                                                         .batchSize(options.getBatchSize())
-                                                         .useCursor(options.getOutputMode() == CURSOR);
+                    .readConcern(getReadConcern())
+                    .maxTime(options.getMaxTime(MILLISECONDS), MILLISECONDS)
+                    .allowDiskUse(options.getAllowDiskUse())
+                    .batchSize(options.getBatchSize())
+                    .useCursor(options.getOutputMode() == com.mongodb.AggregationOptions.OutputMode.CURSOR)
+                    .collation(options.getCollation());
             BatchCursor<DBObject> cursor = executor.execute(operation, readPreference);
             return new MongoCursorAdapter(new MongoBatchCursorAdapter<DBObject>(cursor));
         }
@@ -1393,15 +1478,13 @@ public class DBCollection {
         AggregateOperation<BsonDocument> operation = new AggregateOperation<BsonDocument>(getNamespace(), preparePipeline(pipeline),
                                                                                           new BsonDocumentCodec())
                                                          .maxTime(options.getMaxTime(MILLISECONDS), MILLISECONDS)
-                                                         .allowDiskUse(options.getAllowDiskUse());
+                                                         .allowDiskUse(options.getAllowDiskUse())
+                                                         .collation(options.getCollation());
         return new CommandResult(executor.execute(operation.asExplainableOperation(ExplainVerbosity.QUERY_PLANNER), primaryPreferred()));
     }
 
     @SuppressWarnings("unchecked")
-    private List<BsonDocument> preparePipeline(final List<? extends DBObject> pipeline) {
-        if (pipeline.isEmpty()) {
-            throw new MongoException("Aggregation pipelines can not be empty");
-        }
+    List<BsonDocument> preparePipeline(final List<? extends DBObject> pipeline) {
         List<BsonDocument> stages = new ArrayList<BsonDocument>();
         for (final DBObject op : pipeline) {
             stages.add(wrap(op));
@@ -1538,7 +1621,11 @@ public class DBCollection {
      * @mongodb.driver.manual /administration/indexes-creation/ Index Creation Tutorials
      */
     public void createIndex(final DBObject keys, final DBObject options) {
-        executor.execute(createIndexOperation(keys, options));
+        try {
+            executor.execute(createIndexOperation(keys, options));
+        } catch (MongoWriteConcernException e) {
+            throw createWriteConcernException(e);
+        }
     }
 
     /**
@@ -1650,7 +1737,7 @@ public class DBCollection {
     public DBObject findAndModify(final DBObject query, final DBObject fields, final DBObject sort, final boolean remove,
                                   final DBObject update, final boolean returnNew,
                                   final boolean upsert, final WriteConcern writeConcern){
-        return findAndModifyImpl(query, fields, sort, remove, update, returnNew, upsert, null, 0L, MILLISECONDS, writeConcern);
+        return findAndModify(query, fields, sort, remove, update, returnNew, upsert, 0L, MILLISECONDS, writeConcern);
     }
 
     /**
@@ -1678,7 +1765,7 @@ public class DBCollection {
                                   final boolean remove, final DBObject update,
                                   final boolean returnNew, final boolean upsert,
                                   final long maxTime, final TimeUnit maxTimeUnit) {
-        return findAndModifyImpl(query, fields, sort, remove, update, returnNew, upsert, null, maxTime, maxTimeUnit, getWriteConcern());
+        return findAndModify(query, fields, sort, remove, update, returnNew, upsert, maxTime, maxTimeUnit, getWriteConcern());
 
     }
 
@@ -1709,7 +1796,15 @@ public class DBCollection {
                                   final boolean returnNew, final boolean upsert,
                                   final long maxTime, final TimeUnit maxTimeUnit,
                                   final WriteConcern writeConcern) {
-        return findAndModifyImpl(query, fields, sort, remove, update, returnNew, upsert, null, maxTime, maxTimeUnit, writeConcern);
+        return findAndModify(query != null ? query : new BasicDBObject(), new DBCollectionFindAndModifyOptions()
+                .projection(fields)
+                .sort(sort)
+                .remove(remove)
+                .update(update)
+                .returnNew(returnNew)
+                .upsert(upsert)
+                .maxTime(maxTime, maxTimeUnit)
+                .writeConcern(writeConcern));
     }
 
     /**
@@ -1739,8 +1834,8 @@ public class DBCollection {
                                   final boolean returnNew, final boolean upsert,
                                   final boolean bypassDocumentValidation,
                                   final long maxTime, final TimeUnit maxTimeUnit) {
-        return findAndModifyImpl(query, fields, sort, remove, update, returnNew, upsert, bypassDocumentValidation, maxTime, maxTimeUnit,
-                                 getWriteConcern());
+        return findAndModify(query, fields, sort, remove, update, returnNew, upsert, bypassDocumentValidation, maxTime, maxTimeUnit,
+                getWriteConcern());
     }
 
     /**
@@ -1772,55 +1867,74 @@ public class DBCollection {
                                   final boolean bypassDocumentValidation,
                                   final long maxTime, final TimeUnit maxTimeUnit,
                                   final WriteConcern writeConcern) {
-        return findAndModifyImpl(query, fields, sort, remove, update, returnNew, upsert, bypassDocumentValidation, maxTime, maxTimeUnit,
-                                 writeConcern);
+        return findAndModify(query != null ? query : new BasicDBObject(), new DBCollectionFindAndModifyOptions()
+                .projection(fields)
+                .sort(sort)
+                .remove(remove)
+                .update(update)
+                .returnNew(returnNew)
+                .upsert(upsert)
+                .bypassDocumentValidation(bypassDocumentValidation)
+                .maxTime(maxTime, maxTimeUnit)
+                .writeConcern(writeConcern));
     }
 
-    private DBObject findAndModifyImpl(final DBObject query, final DBObject fields, final DBObject sort,
-                                       final boolean remove, final DBObject update,
-                                       final boolean returnNew, final boolean upsert,
-                                       final Boolean bypassDocumentValidation,
-                                       final long maxTime, final TimeUnit maxTimeUnit,
-                                       final WriteConcern writeConcern) {
+    /**
+     * Atomically modify and return a single document. By default, the returned document does not include the modifications made on the
+     * update.
+     *
+     * @param query    specifies the selection criteria for the modification
+     * @param options  the options regarding the find and modify operation
+     * @return the document as it was before the modifications, unless {@code oprtions.returnNew} is true, in which case it returns the
+     * document after the changes were made
+     * @throws WriteConcernException if the write failed due some other failure specific to the update command
+     * @throws MongoException if the operation failed for some other reason
+     * @mongodb.driver.manual reference/command/findAndModify/ Find and Modify
+     * @since 3.4
+     */
+    public DBObject findAndModify(final DBObject query, final DBCollectionFindAndModifyOptions options) {
+        notNull("query", query);
+        notNull("options", options);
+        WriteConcern writeConcern = options.getWriteConcern() != null ? options.getWriteConcern() : getWriteConcern();
         WriteOperation<DBObject> operation;
-        if (remove) {
+        if (options.isRemove()) {
             operation = new FindAndDeleteOperation<DBObject>(getNamespace(), writeConcern, objectCodec)
                         .filter(wrapAllowNull(query))
-                        .projection(wrapAllowNull(fields))
-                        .sort(wrapAllowNull(sort))
-                        .maxTime(maxTime, maxTimeUnit);
+                        .projection(wrapAllowNull(options.getProjection()))
+                        .sort(wrapAllowNull(options.getSort()))
+                        .maxTime(options.getMaxTime(MILLISECONDS), MILLISECONDS)
+                        .collation(options.getCollation());
         } else {
-            if (update == null) {
-                throw new IllegalArgumentException("Update document can't be null");
-            }
-            if (!update.keySet().isEmpty() && update.keySet().iterator().next().charAt(0) == '$') {
-                operation = new FindAndUpdateOperation<DBObject>(getNamespace(), writeConcern, objectCodec, wrapAllowNull(update))
-                            .filter(wrap(query))
-                            .projection(wrapAllowNull(fields))
-                            .sort(wrapAllowNull(sort))
-                            .returnOriginal(!returnNew)
-                            .upsert(upsert)
-                            .maxTime(maxTime, maxTimeUnit)
-                            .bypassDocumentValidation(bypassDocumentValidation);
+            notNull("options#getUpdate", options.getUpdate());
+            if (!options.getUpdate().keySet().isEmpty() && options.getUpdate().keySet().iterator().next().charAt(0) == '$') {
+                operation = new FindAndUpdateOperation<DBObject>(getNamespace(), writeConcern, objectCodec,
+                        wrap(options.getUpdate()))
+                        .filter(wrap(query))
+                        .projection(wrapAllowNull(options.getProjection()))
+                        .sort(wrapAllowNull(options.getSort()))
+                        .returnOriginal(!options.returnNew())
+                        .upsert(options.isUpsert())
+                        .maxTime(options.getMaxTime(MILLISECONDS), MILLISECONDS)
+                        .bypassDocumentValidation(options.getBypassDocumentValidation())
+                        .collation(options.getCollation());
             } else {
-                operation = new FindAndReplaceOperation<DBObject>(getNamespace(), writeConcern, objectCodec, wrap(update))
-                            .filter(wrapAllowNull(query))
-                            .projection(wrapAllowNull(fields))
-                            .sort(wrapAllowNull(sort))
-                            .returnOriginal(!returnNew)
-                            .upsert(upsert)
-                            .maxTime(maxTime, maxTimeUnit)
-                            .bypassDocumentValidation(bypassDocumentValidation);
+                operation = new FindAndReplaceOperation<DBObject>(getNamespace(), writeConcern, objectCodec,
+                        wrap(options.getUpdate()))
+                        .filter(wrap(query))
+                        .projection(wrapAllowNull(options.getProjection()))
+                        .sort(wrapAllowNull(options.getSort()))
+                        .returnOriginal(!options.returnNew())
+                        .upsert(options.isUpsert())
+                        .maxTime(options.getMaxTime(MILLISECONDS), MILLISECONDS)
+                        .bypassDocumentValidation(options.getBypassDocumentValidation())
+                        .collation(options.getCollation());
             }
         }
 
         try {
             return executor.execute(operation);
         } catch (MongoWriteConcernException e) {
-            throw new WriteConcernException(new BsonDocument("code", new BsonInt32(e.getWriteConcernError().getCode()))
-                                           .append("errmsg", new BsonString(e.getWriteConcernError().getMessage())),
-                                            e.getServerAddress(),
-                                            e.getWriteResult());
+            throw createWriteConcernException(e);
         }
     }
 
@@ -1909,7 +2023,6 @@ public class DBCollection {
         return database.getReadConcern();
     }
 
-
     /**
      * Makes this query ok to run on a slave node
      *
@@ -1966,7 +2079,11 @@ public class DBCollection {
      * @mongodb.driver.manual reference/command/drop/ Drop Command
      */
     public void drop() {
-        executor.execute(new DropCollectionOperation(getNamespace()));
+        try {
+            executor.execute(new DropCollectionOperation(getNamespace(), getWriteConcern()));
+        } catch (MongoWriteConcernException e) {
+            throw createWriteConcernException(e);
+        }
     }
 
     /**
@@ -2027,8 +2144,12 @@ public class DBCollection {
      * @mongodb.driver.manual core/indexes/ Indexes
      */
     public List<DBObject> getIndexInfo() {
-        return new OperationIterable<DBObject>(new ListIndexesOperation<DBObject>(getNamespace(), getDefaultDBObjectCodec()),
-                                               primary(), executor).into(new ArrayList<DBObject>());
+        return new MongoIterableImpl<DBObject>(null, executor, ReadConcern.DEFAULT, primary()) {
+            @Override
+            ReadOperation<BatchCursor<DBObject>> asReadOperation() {
+                return new ListIndexesOperation<DBObject>(getNamespace(), getDefaultDBObjectCodec());
+            }
+        }.into(new ArrayList<DBObject>());
     }
 
     /**
@@ -2051,7 +2172,11 @@ public class DBCollection {
      * @mongodb.driver.manual core/indexes/ Indexes
      */
     public void dropIndex(final String indexName) {
-        executor.execute(new DropIndexOperation(getNamespace(), indexName));
+        try {
+            executor.execute(new DropIndexOperation(getNamespace(), indexName, getWriteConcern()));
+        } catch (MongoWriteConcernException e) {
+            throw createWriteConcernException(e);
+        }
     }
 
     /**
@@ -2193,11 +2318,8 @@ public class DBCollection {
                                               final WriteConcern writeConcern) {
         try {
             return translateBulkWriteResult(executor.execute(new MixedBulkWriteOperation(getNamespace(),
-                                                                                         translateWriteRequestsToNew(writeRequests,
-                                                                                                                     getObjectCodec()),
-                                                                                         ordered, writeConcern)
-                                                             .bypassDocumentValidation(bypassDocumentValidation)),
-                                            getObjectCodec());
+                            translateWriteRequestsToNew(writeRequests), ordered, writeConcern)
+                            .bypassDocumentValidation(bypassDocumentValidation)), getObjectCodec());
         } catch (MongoBulkWriteException e) {
             throw BulkWriteHelper.translateBulkWriteException(e, MongoClient.getDefaultCodecRegistry().get(DBObject.class));
         }
@@ -2299,8 +2421,10 @@ public class DBCollection {
         if (options.containsField("partialFilterExpression")) {
             request.partialFilterExpression(wrap(convertOptionsToType(options, "partialFilterExpression", DBObject.class)));
         }
-
-        return new CreateIndexesOperation(getNamespace(), asList(request));
+        if (options.containsField("collation")) {
+            request.collation(DBObjectCollationHelper.createCollationFromOptions(options));
+        }
+        return new CreateIndexesOperation(getNamespace(), singletonList(request), writeConcern);
     }
 
     private String getIndexNameFromIndexFields(final DBObject index) {
@@ -2370,4 +2494,12 @@ public class DBCollection {
             return new BsonDocumentWrapper<DBObject>(document, encoder);
         }
     }
+
+    static WriteConcernException createWriteConcernException(final MongoWriteConcernException e) {
+        return new WriteConcernException(new BsonDocument("code", new BsonInt32(e.getWriteConcernError().getCode()))
+                                                .append("errmsg", new BsonString(e.getWriteConcernError().getMessage())),
+                                               e.getServerAddress(),
+                                               e.getWriteResult());
+    }
+
 }

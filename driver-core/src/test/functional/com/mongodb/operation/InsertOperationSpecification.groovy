@@ -41,6 +41,15 @@ import static com.mongodb.WriteConcern.UNACKNOWLEDGED
 import static java.util.Arrays.asList
 
 class InsertOperationSpecification extends OperationFunctionalSpecification {
+
+    def 'should throw IllegalArgumentException for empty list of requests'() {
+        when:
+        new InsertOperation(getNamespace(), true, ACKNOWLEDGED, [])
+
+        then:
+        thrown(IllegalArgumentException)
+    }
+
     def 'should return correct result'() {
         given:
         def insert = new InsertRequest(new BsonDocument('_id', new BsonInt32(1)))
@@ -303,7 +312,7 @@ class InsertOperationSpecification extends OperationFunctionalSpecification {
         getCollectionHelper().find().get(0).keySet() as List == ['_id', 'x']
     }
 
-    @IgnoreIf({ !serverVersionAtLeast(asList(3, 2, 0)) })
+    @IgnoreIf({ !serverVersionAtLeast(3, 2) })
     def 'should throw if bypassDocumentValidation is set and write is unacknowledged'() {
         given:
         def op = new InsertOperation(getNamespace(), true,  UNACKNOWLEDGED, [new InsertRequest(new BsonDocument())])

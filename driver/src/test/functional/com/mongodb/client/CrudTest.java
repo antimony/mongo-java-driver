@@ -19,7 +19,6 @@ package com.mongodb.client;
 import org.bson.BsonArray;
 import org.bson.BsonDocument;
 import org.bson.BsonValue;
-import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -33,8 +32,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
-import static com.mongodb.ClusterFixture.serverVersionAtLeast;
-import static java.util.Arrays.asList;
+import static com.mongodb.ClusterFixture.serverVersionGreaterThan;
+import static com.mongodb.ClusterFixture.serverVersionLessThan;
 import static org.junit.Assert.assertEquals;
 
 // See https://github.com/mongodb/specifications/tree/master/source/crud/tests
@@ -68,23 +67,11 @@ public class CrudTest extends DatabaseTestCase {
 
     @Test
     public void shouldPassAllOutcomes() {
-        // Server versions prior to 2.6 do not properly recognize non-ObjectId _id values for upserts, so skipping a test that relies on
-        // that unless the server version is at least 2.6
-        if (description.equals("ReplaceOne with upsert when no documents match without an id specified")){
-            Assume.assumeTrue(serverVersionAtLeast(asList(2, 6, 0)));
-        }
-
         BsonDocument outcome = helper.getOperationResults(definition.getDocument("operation"));
         BsonDocument expectedOutcome = definition.getDocument("outcome");
 
-        if (checkResult()) {
-            if (!serverVersionAtLeast(asList(2, 6, 0))) {
-                if (expectedOutcome.isDocument("result")) {
-                    expectedOutcome.getDocument("result").remove("modifiedCount");
-                }
-            }
-            assertEquals(description, expectedOutcome.get("result"), outcome.get("result"));
-        }
+        assertEquals(description, expectedOutcome.get("result"), outcome.get("result"));
+
         if (expectedOutcome.containsKey("collection")) {
             assertCollectionEquals(expectedOutcome.getDocument("collection"));
         }
@@ -95,24 +82,20 @@ public class CrudTest extends DatabaseTestCase {
         List<Object[]> data = new ArrayList<Object[]>();
         for (File file : JsonPoweredTestHelper.getTestFiles("/crud")) {
             BsonDocument testDocument = util.JsonPoweredTestHelper.getTestDocument(file);
+            if (testDocument.containsKey("minServerVersion")
+                    && serverVersionLessThan(testDocument.getString("minServerVersion").getValue())) {
+                continue;
+            }
+            if (testDocument.containsKey("maxServerVersion")
+                        && serverVersionGreaterThan(testDocument.getString("maxServerVersion").getValue())) {
+                continue;
+            }
             for (BsonValue test: testDocument.getArray("tests")) {
                 data.add(new Object[]{file.getName(), test.asDocument().getString("description").getValue(),
                         testDocument.getArray("data"), test.asDocument()});
             }
         }
         return data;
-    }
-
-    private boolean checkResult() {
-        if (filename.contains("insert")) {
-            // We don't return any id's for insert commands
-            return false;
-        } else if (!serverVersionAtLeast(asList(3, 0, 0))
-                && description.contains("when no documents match with upsert returning the document before modification")) {
-            // Pre 3.0 versions of MongoDB return an empty document rather than a null
-            return false;
-        }
-        return true;
     }
 
     private void assertCollectionEquals(final BsonDocument expectedCollection) {

@@ -21,6 +21,7 @@ import com.mongodb.async.SingleResultCallback;
 import com.mongodb.diagnostics.logging.Logger;
 import com.mongodb.diagnostics.logging.Loggers;
 import com.mongodb.event.CommandListener;
+import com.mongodb.internal.connection.NoOpSessionContext;
 import org.bson.BsonArray;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
@@ -51,7 +52,7 @@ import static java.lang.String.format;
  * @param <T> the type of document to decode query results to
  * @mongodb.driver.manual ../meta-driver/latest/legacy/mongodb-wire-protocol/#op-query OP_QUERY
  */
-class QueryProtocol<T> implements Protocol<QueryResult<T>> {
+class QueryProtocol<T> implements LegacyProtocol<QueryResult<T>> {
 
     public static final Logger LOGGER = Loggers.getLogger("protocol.query");
     private static final String FIND_COMMAND_NAME = "find";
@@ -73,19 +74,8 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
     private boolean partial;
     private CommandListener commandListener;
 
-    /**
-     * Construct an instance.
-     *
-     * @param namespace      the namespace
-     * @param skip           the number of documents to skip
-     * @param numberToReturn the number to return
-     * @param queryDocument  the query document
-     * @param fields         the fields to return in the result documents
-     * @param resultDecoder  the decoder for the result documents
-     */
-    public QueryProtocol(final MongoNamespace namespace, final int skip,
-                         final int numberToReturn, final BsonDocument queryDocument,
-                         final BsonDocument fields, final Decoder<T> resultDecoder) {
+    QueryProtocol(final MongoNamespace namespace, final int skip, final int numberToReturn, final BsonDocument queryDocument,
+                  final BsonDocument fields, final Decoder<T> resultDecoder) {
         this.namespace = namespace;
         this.skip = skip;
         this.withLimitAndBatchSize = false;
@@ -97,8 +87,8 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
         this.resultDecoder = resultDecoder;
     }
 
-    public QueryProtocol(final MongoNamespace namespace, final int skip, final int limit, final int batchSize,
-                         final BsonDocument queryDocument, final BsonDocument fields, final Decoder<T> resultDecoder) {
+    QueryProtocol(final MongoNamespace namespace, final int skip, final int limit, final int batchSize,
+                  final BsonDocument queryDocument, final BsonDocument fields, final Decoder<T> resultDecoder) {
         this.namespace = namespace;
         this.skip = skip;
         this.withLimitAndBatchSize = true;
@@ -279,8 +269,8 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
             ByteBufferBsonOutput bsonOutput = new ByteBufferBsonOutput(connection);
             try {
                 message = createQueryMessage(connection.getDescription());
-                RequestMessage.EncodingMetadata metadata = message.encodeWithMetadata(bsonOutput);
-                isExplain = sendQueryStartedEvent(connection, message, bsonOutput, metadata);
+                message.encode(bsonOutput, NoOpSessionContext.INSTANCE);
+                isExplain = sendQueryStartedEvent(connection, message, bsonOutput, message.getEncodingMetadata());
                 connection.sendMessage(bsonOutput.getByteBuffers(), message.getId());
             } finally {
                 bsonOutput.close();
@@ -483,7 +473,7 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
                                                        final boolean isExplain) {
         List<ByteBufBsonDocument> rawResultDocuments = Collections.emptyList();
         if (responseBuffers.getReplyHeader().getNumberReturned() > 0) {
-            responseBuffers.getBodyByteBuffer().position(0);
+            responseBuffers.reset();
             rawResultDocuments = ByteBufBsonDocument.create(responseBuffers);
         }
 
@@ -510,9 +500,8 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
         private final QueryMessage message;
         private final boolean isExplainEvent;
 
-        public QueryResultCallback(final SingleResultCallback<QueryResult<T>> callback, final int requestId, final long startTimeNanos,
-                                   final QueryMessage message, final boolean isExplainEvent,
-                                   final ConnectionDescription connectionDescription) {
+        QueryResultCallback(final SingleResultCallback<QueryResult<T>> callback, final int requestId, final long startTimeNanos,
+                            final QueryMessage message, final boolean isExplainEvent, final ConnectionDescription connectionDescription) {
             super(requestId, connectionDescription.getServerAddress());
             this.callback = callback;
             this.startTimeNanos = startTimeNanos;

@@ -25,6 +25,7 @@ import com.mongodb.async.SingleResultCallback;
 import com.mongodb.bulk.BulkWriteResult;
 import com.mongodb.client.model.BulkWriteOptions;
 import com.mongodb.client.model.CountOptions;
+import com.mongodb.client.model.DeleteOptions;
 import com.mongodb.client.model.FindOneAndDeleteOptions;
 import com.mongodb.client.model.FindOneAndReplaceOptions;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
@@ -258,6 +259,48 @@ public interface MongoCollection<TDocument> {
     <TResult> AggregateIterable<TResult> aggregate(List<? extends Bson> pipeline, Class<TResult> resultClass);
 
     /**
+     * Creates a change stream for this collection.
+     *
+     * @return the change stream iterable
+     * @mongodb.driver.manual reference/operator/aggregation/changeStream $changeStream
+     * @since 3.6
+     */
+    ChangeStreamIterable<TDocument> watch();
+
+    /**
+     * Creates a change stream for this collection.
+     *
+     * @param resultClass the class to decode each document into
+     * @param <TResult>   the target document type of the iterable.
+     * @return the change stream iterable
+     * @mongodb.driver.manual reference/operator/aggregation/changeStream $changeStream
+     * @since 3.6
+     */
+    <TResult> ChangeStreamIterable<TResult> watch(Class<TResult> resultClass);
+
+    /**
+     * Creates a change stream for this collection.
+     *
+     * @param pipeline the aggregation pipeline to apply to the change stream
+     * @return the change stream iterable
+     * @mongodb.driver.manual reference/operator/aggregation/changeStream $changeStream
+     * @since 3.6
+     */
+    ChangeStreamIterable<TDocument> watch(List<? extends Bson> pipeline);
+
+    /**
+     * Creates a change stream for this collection.
+     *
+     * @param pipeline    the aggregation pipeline to apply to the change stream
+     * @param resultClass the class to decode each document into
+     * @param <TResult>   the target document type of the iterable.
+     * @return the change stream iterable
+     * @mongodb.driver.manual reference/operator/aggregation/changeStream $changeStream
+     * @since 3.6
+     */
+    <TResult> ChangeStreamIterable<TResult> watch(List<? extends Bson> pipeline, Class<TResult> resultClass);
+
+    /**
      * Aggregates documents according to the specified map-reduce function.
      *
      * @param mapFunction    A JavaScript function that associates or "maps" a value with a key and emits the key and value pair.
@@ -358,6 +401,19 @@ public interface MongoCollection<TDocument> {
     void deleteOne(Bson filter, SingleResultCallback<DeleteResult> callback);
 
     /**
+     * Removes at most one document from the collection that matches the given filter.  If no documents match, the collection is not
+     * modified.
+     *
+     * @param filter   the query filter to apply the the delete operation
+     * @param options  the options to apply to the delete operation
+     * @param callback the callback passed the result of the remove one operation
+     * @throws com.mongodb.MongoWriteException        returned via the callback
+     * @throws com.mongodb.MongoWriteConcernException returned via the callback
+     * @throws com.mongodb.MongoException             returned via the callback
+     */
+    void deleteOne(Bson filter, DeleteOptions options, SingleResultCallback<DeleteResult> callback);
+
+    /**
      * Removes all documents from the collection that match the given query filter.  If no documents match, the collection is not modified.
      *
      * @param filter   the query filter to apply the the delete operation
@@ -367,6 +423,18 @@ public interface MongoCollection<TDocument> {
      * @throws com.mongodb.MongoException             returned via the callback
      */
     void deleteMany(Bson filter, SingleResultCallback<DeleteResult> callback);
+
+    /**
+     * Removes all documents from the collection that match the given query filter.  If no documents match, the collection is not modified.
+     *
+     * @param filter   the query filter to apply the the delete operation
+     * @param options  the options to apply to the delete operation
+     * @param callback the callback passed the result of the remove many operation
+     * @throws com.mongodb.MongoWriteException        returned via the callback
+     * @throws com.mongodb.MongoWriteConcernException returned via the callback
+     * @throws com.mongodb.MongoException             returned via the callback
+     */
+    void deleteMany(Bson filter, DeleteOptions options, SingleResultCallback<DeleteResult> callback);
 
     /**
      * Replace a document in the collection according to the specified arguments.
@@ -429,7 +497,7 @@ public interface MongoCollection<TDocument> {
      *
      * @param filter   a document describing the query filter, which may not be null.
      * @param update   a document describing the update, which may not be null. The update to apply must include only update operators. T
-     * @param callback the callback passed the result of the update one operation
+     * @param callback the callback passed the result of the update many operation
      * @throws com.mongodb.MongoWriteException        returned via the callback
      * @throws com.mongodb.MongoWriteConcernException returned via the callback
      * @throws com.mongodb.MongoException             returned via the callback
@@ -444,7 +512,7 @@ public interface MongoCollection<TDocument> {
      * @param filter   a document describing the query filter, which may not be null.
      * @param update   a document describing the update, which may not be null. The update to apply must include only update operators.
      * @param options  the options to apply to the update operation
-     * @param callback the callback passed the result of the update one operation
+     * @param callback the callback passed the result of the update many operation
      * @throws com.mongodb.MongoWriteException        returned via the callback
      * @throws com.mongodb.MongoWriteConcernException returned via the callback
      * @throws com.mongodb.MongoException             returned via the callback
@@ -605,7 +673,7 @@ public interface MongoCollection<TDocument> {
      * @param callback               the callback that is completed once the collection has been renamed
      * @throws com.mongodb.MongoServerException if you provide a newCollectionName that is the name of an existing collection, or if the
      *                                          oldCollectionName is the name of a collection that doesn't exist
-     * @mongodb.driver.manual reference/commands/renameCollection Rename collection
+     * @mongodb.driver.manual reference/command/renameCollection Rename collection
      */
     void renameCollection(MongoNamespace newCollectionNamespace, SingleResultCallback<Void> callback);
 
@@ -617,7 +685,7 @@ public interface MongoCollection<TDocument> {
      * @param callback               the callback that is completed once the collection has been renamed
      * @throws com.mongodb.MongoServerException if you provide a newCollectionName that is the name of an existing collection and dropTarget
      *                                          is false, or if the oldCollectionName is the name of a collection that doesn't exist
-     * @mongodb.driver.manual reference/commands/renameCollection Rename collection
+     * @mongodb.driver.manual reference/command/renameCollection Rename collection
      */
     void renameCollection(MongoNamespace newCollectionNamespace, RenameCollectionOptions options, SingleResultCallback<Void> callback);
 

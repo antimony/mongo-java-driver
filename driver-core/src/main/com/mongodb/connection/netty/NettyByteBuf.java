@@ -26,11 +26,12 @@ final class NettyByteBuf implements ByteBuf {
     private io.netty.buffer.ByteBuf proxied;
     private boolean isWriting = true;
 
-    public NettyByteBuf(final io.netty.buffer.ByteBuf proxied) {
-        this.proxied = proxied;
+    @SuppressWarnings("deprecation")
+    NettyByteBuf(final io.netty.buffer.ByteBuf proxied) {
+        this.proxied = proxied.order(ByteOrder.LITTLE_ENDIAN);
     }
 
-    public NettyByteBuf(final io.netty.buffer.ByteBuf proxied, final boolean isWriting) {
+    NettyByteBuf(final io.netty.buffer.ByteBuf proxied, final boolean isWriting) {
         this(proxied);
         this.isWriting = isWriting;
     }
@@ -113,6 +114,7 @@ final class NettyByteBuf implements ByteBuf {
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     public ByteBuf order(final ByteOrder byteOrder) {
         proxied = proxied.order(byteOrder);
         return this;
@@ -208,7 +210,7 @@ final class NettyByteBuf implements ByteBuf {
 
     @Override
     public ByteBuf duplicate() {
-        return new NettyByteBuf(proxied.duplicate(), isWriting);
+        return new NettyByteBuf(proxied.duplicate().retain(), isWriting);
     }
 
     @Override

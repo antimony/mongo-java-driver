@@ -29,6 +29,7 @@ import org.bson.types.ObjectId;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -57,7 +58,7 @@ final class DescriptionHelper {
                                                              final BsonDocument buildInfoResult) {
         return new ConnectionDescription(connectionId, getVersion(buildInfoResult), getServerType(isMasterResult),
                                          getMaxWriteBatchSize(isMasterResult), getMaxBsonObjectSize(isMasterResult),
-                                         getMaxMessageSizeBytes(isMasterResult));
+                                         getMaxMessageSizeBytes(isMasterResult), getCompressors(isMasterResult));
 
     }
 
@@ -82,8 +83,17 @@ final class DescriptionHelper {
                                                                         new BsonInt32(getDefaultMaxWireVersion())).getValue())
                                 .electionId(getElectionId(isMasterResult))
                                 .setVersion(getSetVersion(isMasterResult))
+                                .lastWriteDate(getLastWriteDate(isMasterResult))
                                 .roundTripTime(roundTripTime, NANOSECONDS)
+                                .logicalSessionTimeoutMinutes(getLogicalSessionTimeoutMinutes(isMasterResult))
                                 .ok(CommandHelper.isCommandOk(isMasterResult)).build();
+    }
+
+    private static Date getLastWriteDate(final BsonDocument isMasterResult) {
+        if (!isMasterResult.containsKey("lastWrite")) {
+            return null;
+        }
+        return new Date(isMasterResult.getDocument("lastWrite").getDateTime("lastWriteDate").getValue());
     }
 
     private static ObjectId getElectionId(final BsonDocument isMasterResult) {
@@ -104,6 +114,11 @@ final class DescriptionHelper {
 
     private static int getMaxWriteBatchSize(final BsonDocument isMasterResult) {
         return isMasterResult.getInt32("maxWriteBatchSize", new BsonInt32(getDefaultMaxWriteBatchSize())).getValue();
+    }
+
+    private static Integer getLogicalSessionTimeoutMinutes(final BsonDocument isMasterResult) {
+        return isMasterResult.isNumber("logicalSessionTimeoutMinutes")
+                       ? isMasterResult.getNumber("logicalSessionTimeoutMinutes").intValue() : null;
     }
 
     private static String getString(final BsonDocument response, final String key) {
@@ -183,6 +198,14 @@ final class DescriptionHelper {
             tagList.add(new Tag(curEntry.getKey(), curEntry.getValue().asString().getValue()));
         }
         return new TagSet(tagList);
+    }
+
+    private static List<String> getCompressors(final BsonDocument isMasterResult) {
+        List<String> compressorList = new ArrayList<String>();
+        for (BsonValue compressor : isMasterResult.getArray("compression", new BsonArray())) {
+            compressorList.add(compressor.asString().getValue());
+        }
+        return compressorList;
     }
 
     private DescriptionHelper() {

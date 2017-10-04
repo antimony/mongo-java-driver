@@ -16,6 +16,7 @@
 
 package com.mongodb
 
+import com.mongodb.client.model.Collation
 import com.mongodb.client.model.FindOptions
 import com.mongodb.operation.BatchCursor
 import com.mongodb.operation.FindOperation
@@ -42,23 +43,34 @@ class FindIterableSpecification extends Specification {
     def readPreference = secondary()
     def readConcern = ReadConcern.DEFAULT
     def namespace = new MongoNamespace('db', 'coll')
+    def collation = Collation.builder().locale('en').build()
 
+    @SuppressWarnings('deprecation')
     def 'should build the expected findOperation'() {
         given:
         def executor = new TestOperationExecutor([null, null]);
         def findOptions = new FindOptions().sort(new Document('sort', 1))
-                                           .modifiers(new Document('modifier', 1))
-                                           .projection(new Document('projection', 1))
-                                           .maxTime(10, SECONDS)
-                                           .maxAwaitTime(20, SECONDS)
-                                           .batchSize(100)
-                                           .limit(100)
-                                           .skip(10)
-                                           .cursorType(CursorType.NonTailable)
-                                           .oplogReplay(false)
-                                           .noCursorTimeout(false)
-                                           .partial(false)
-        def findIterable = new FindIterableImpl(namespace, Document, Document, codecRegistry, readPreference, readConcern,
+                .modifiers(new Document('modifier', 1))
+                .projection(new Document('projection', 1))
+                .maxTime(10, SECONDS)
+                .maxAwaitTime(20, SECONDS)
+                .batchSize(100)
+                .limit(100)
+                .skip(10)
+                .cursorType(CursorType.NonTailable)
+                .oplogReplay(false)
+                .noCursorTimeout(false)
+                .partial(false)
+                .collation(null)
+                .comment('my comment')
+                .hint(new Document('hint', 1))
+                .min(new Document('min', 1))
+                .max(new Document('max', 1))
+                .maxScan(42L)
+                .returnKey(false)
+                .showRecordId(false)
+                .snapshot(false)
+        def findIterable = new FindIterableImpl(null, namespace, Document, Document, codecRegistry, readPreference, readConcern,
                 executor, new Document('filter', 1), findOptions)
 
         when: 'default input should be as expected'
@@ -80,6 +92,14 @@ class FindIterableSpecification extends Specification {
                 .skip(10)
                 .cursorType(CursorType.NonTailable)
                 .slaveOk(true)
+                .comment('my comment')
+                .hint(new BsonDocument('hint', new BsonInt32(1)))
+                .min(new BsonDocument('min', new BsonInt32(1)))
+                .max(new BsonDocument('max', new BsonInt32(1)))
+                .maxScan(42L)
+                .returnKey(false)
+                .showRecordId(false)
+                .snapshot(false)
         )
         readPreference == secondary()
 
@@ -97,6 +117,15 @@ class FindIterableSpecification extends Specification {
                 .oplogReplay(true)
                 .noCursorTimeout(true)
                 .partial(true)
+                .collation(collation)
+                .comment('alt comment')
+                .hint(new Document('hint', 2))
+                .min(new Document('min', 2))
+                .max(new Document('max', 2))
+                .maxScan(88L)
+                .returnKey(true)
+                .showRecordId(true)
+                .snapshot(true)
                 .iterator()
 
         operation = executor.getReadOperation() as FindOperation<Document>
@@ -117,14 +146,48 @@ class FindIterableSpecification extends Specification {
                 .noCursorTimeout(true)
                 .partial(true)
                 .slaveOk(true)
+                .collation(collation)
+                .comment('alt comment')
+                .hint(new BsonDocument('hint', new BsonInt32(2)))
+                .min(new BsonDocument('min', new BsonInt32(2)))
+                .max(new BsonDocument('max', new BsonInt32(2)))
+                .maxScan(88L)
+                .returnKey(true)
+                .showRecordId(true)
+                .snapshot(true)
         )
+    }
+
+    def 'should use ClientSession'() {
+        given:
+        def batchCursor = Stub(BatchCursor) {
+            _ * hasNext() >> { false }
+        }
+        def executor = new TestOperationExecutor([batchCursor, batchCursor]);
+        def findIterable = new FindIterableImpl(clientSession, namespace, Document, Document, codecRegistry, readPreference, readConcern,
+                executor, new Document('filter', 1), new FindOptions())
+
+        when:
+        findIterable.first()
+
+        then:
+        executor.getClientSession() == clientSession
+
+        when:
+        findIterable.iterator()
+
+        then:
+        executor.getClientSession() == clientSession
+
+        where:
+        clientSession << [null, Stub(ClientSession)]
     }
 
     def 'should handle mixed types'() {
         given:
         def executor = new TestOperationExecutor([null, null]);
         def findOptions = new FindOptions()
-        def findIterable = new FindIterableImpl(namespace, Document, Document, codecRegistry, readPreference, readConcern,
+        def findIterable = new FindIterableImpl(null, namespace, Document, Document, codecRegistry, readPreference, readConcern,
                 executor, new Document('filter', 1), findOptions)
 
         when:
@@ -168,7 +231,7 @@ class FindIterableSpecification extends Specification {
         }
         def executor = new TestOperationExecutor([cursor(), cursor(), cursor(), cursor()]);
         def findOptions = new FindOptions()
-        def mongoIterable = new FindIterableImpl(namespace, Document, Document, codecRegistry, readPreference, readConcern,
+        def mongoIterable = new FindIterableImpl(null, namespace, Document, Document, codecRegistry, readPreference, readConcern,
                 executor, new Document(), findOptions)
 
         when:

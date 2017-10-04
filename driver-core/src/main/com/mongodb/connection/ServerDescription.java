@@ -24,6 +24,7 @@ import org.bson.types.ObjectId;
 
 import java.text.DecimalFormat;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -44,8 +45,8 @@ import static com.mongodb.connection.ServerType.UNKNOWN;
 @Immutable
 public class ServerDescription {
 
-    static final int MIN_DRIVER_WIRE_VERSION = 0;
-    static final int MAX_DRIVER_WIRE_VERSION = 3;
+    static final int MIN_DRIVER_WIRE_VERSION = 1;
+    static final int MAX_DRIVER_WIRE_VERSION = 6;
 
     private static final int DEFAULT_MAX_DOCUMENT_SIZE = 0x1000000;  // 16MB
 
@@ -70,6 +71,10 @@ public class ServerDescription {
 
     private final ObjectId electionId;
     private final Integer setVersion;
+    private final Date lastWriteDate;
+    private final long lastUpdateTimeNanos;
+
+    private final Integer logicalSessionTimeoutMinutes;
 
     private final Throwable exception;
 
@@ -90,6 +95,17 @@ public class ServerDescription {
      */
     public String getCanonicalAddress() {
         return canonicalAddress;
+    }
+
+    /**
+     * Gets the session timeout in minutes.
+     *
+     * @return the session timeout in minutes, or null if sessions are not supported by this server
+     * @mongodb.server.release 3.6
+     * @since 3.6
+     */
+    public Integer getLogicalSessionTimeoutMinutes() {
+        return logicalSessionTimeoutMinutes;
     }
 
     /**
@@ -115,6 +131,10 @@ public class ServerDescription {
         private int maxWireVersion = 0;
         private ObjectId electionId;
         private Integer setVersion;
+        private Date lastWriteDate;
+        private long lastUpdateTimeNanos = Time.nanoTime();
+        private Integer logicalSessionTimeoutMinutes;
+
         private Throwable exception;
 
         /**
@@ -323,6 +343,48 @@ public class ServerDescription {
             this.setVersion = setVersion;
             return this;
         }
+
+        /**
+         * Sets the lastWriteDate reported by this server
+         *
+         * @param lastWriteDate the last write date, which may be null for servers prior to 3.4
+         * @return this
+         *
+         * @since 3.4
+         * @mongodb.server.release 3.4
+         */
+        public Builder lastWriteDate(final Date lastWriteDate) {
+            this.lastWriteDate = lastWriteDate;
+            return this;
+        }
+
+        /**
+         * Sets the last update time for this description, which is simply the time that the server description was created.
+         * A monotonic clock such as {@link System#nanoTime()} should be used to initialize this value.
+         *
+         * @param lastUpdateTimeNanos the last update time of this server description
+         * @return this
+         *
+         * @since 3.4
+         */
+        public Builder lastUpdateTimeNanos(final long lastUpdateTimeNanos) {
+            this.lastUpdateTimeNanos = lastUpdateTimeNanos;
+            return this;
+        }
+
+        /**
+         * Sets the session timeout in minutes.
+         *
+         * @param logicalSessionTimeoutMinutes the session timeout in minutes, or null if sessions are not supported by this server
+         * @return this
+         * @mongodb.server.release 3.6
+         * @since 3.6
+         */
+        public Builder logicalSessionTimeoutMinutes(final Integer logicalSessionTimeoutMinutes) {
+            this.logicalSessionTimeoutMinutes = logicalSessionTimeoutMinutes;
+            return this;
+        }
+
 
         /**
          * Sets the exception thrown while attempting to determine the server description.
@@ -542,6 +604,28 @@ public class ServerDescription {
     }
 
     /**
+     * Gets the last write date.
+     * @return the last write date, which may be null
+     * @since 3.4
+     * @mongodb.server.release 3.4
+     */
+    public Date getLastWriteDate() {
+        return lastWriteDate;
+    }
+
+    /**
+     * Gets the time that this server description was created, using a monotonic clock like {@link System#nanoTime()}.
+     *
+     * @param timeUnit the time unit
+     * @return the last update time in the given unit
+     *
+     * @since 3.4
+     */
+    public long getLastUpdateTime(final TimeUnit timeUnit) {
+        return timeUnit.convert(lastUpdateTimeNanos, TimeUnit.NANOSECONDS);
+    }
+
+    /**
      * Returns true if the server has the given tags.  A server of either type {@code ServerType.STANDALONE} or {@code
      * ServerType.SHARD_ROUTER} is considered to have all tags, so this method will always return true for instances of either of those
      * types.
@@ -702,6 +786,19 @@ public class ServerDescription {
         if (setVersion != null ? !setVersion.equals(that.setVersion) : that.setVersion != null) {
             return false;
         }
+        if (lastWriteDate != null ? !lastWriteDate.equals(that.lastWriteDate) : that.lastWriteDate != null) {
+            return false;
+        }
+
+        if (lastUpdateTimeNanos != that.lastUpdateTimeNanos) {
+            return false;
+        }
+
+        if (logicalSessionTimeoutMinutes != null
+                    ? !logicalSessionTimeoutMinutes.equals(that.logicalSessionTimeoutMinutes)
+                    : that.logicalSessionTimeoutMinutes != null) {
+            return false;
+        }
 
         // Compare class equality and message as exceptions rarely override equals
         Class<?> thisExceptionClass = exception != null ? exception.getClass() : null;
@@ -733,11 +830,14 @@ public class ServerDescription {
         result = 31 * result + (setName != null ? setName.hashCode() : 0);
         result = 31 * result + (electionId != null ? electionId.hashCode() : 0);
         result = 31 * result + (setVersion != null ? setVersion.hashCode() : 0);
+        result = 31 * result + (lastWriteDate != null ? lastWriteDate.hashCode() : 0);
+        result = 31 * result + (int) (lastUpdateTimeNanos ^ (lastUpdateTimeNanos >>> 32));
         result = 31 * result + (ok ? 1 : 0);
         result = 31 * result + state.hashCode();
         result = 31 * result + version.hashCode();
         result = 31 * result + minWireVersion;
         result = 31 * result + maxWireVersion;
+        result = 31 * result + (logicalSessionTimeoutMinutes != null ? logicalSessionTimeoutMinutes.hashCode() : 0);
         result = 31 * result + (exception == null ? 0 : exception.getClass().hashCode());
         result = 31 * result + (exception == null ? 0 : exception.getMessage().hashCode());
         return result;
@@ -756,6 +856,7 @@ public class ServerDescription {
                   + ", minWireVersion=" + minWireVersion
                   + ", maxWireVersion=" + maxWireVersion
                   + ", maxDocumentSize=" + maxDocumentSize
+                  + ", logicalSessionTimeoutMinutes=" + logicalSessionTimeoutMinutes
                   + ", roundTripTimeNanos=" + roundTripTimeNanos
                   : "")
                + (isReplicaSetMember()
@@ -769,6 +870,8 @@ public class ServerDescription {
                   + ", tagSet=" + tagSet
                   + ", electionId=" + electionId
                   + ", setVersion=" + setVersion
+                  + ", lastWriteDate=" + lastWriteDate
+                  + ", lastUpdateTimeNanos=" + lastUpdateTimeNanos
                 : "")
                + (exception == null ? "" : ", exception=" + translateExceptionToString())
                + '}';
@@ -831,6 +934,9 @@ public class ServerDescription {
         maxWireVersion = builder.maxWireVersion;
         electionId = builder.electionId;
         setVersion = builder.setVersion;
+        lastWriteDate = builder.lastWriteDate;
+        lastUpdateTimeNanos = builder.lastUpdateTimeNanos;
+        logicalSessionTimeoutMinutes = builder.logicalSessionTimeoutMinutes;
         exception = builder.exception;
     }
 }

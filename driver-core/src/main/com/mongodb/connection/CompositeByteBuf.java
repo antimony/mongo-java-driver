@@ -18,6 +18,7 @@ package com.mongodb.connection;
 
 import org.bson.ByteBuf;
 
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -34,14 +35,14 @@ class CompositeByteBuf implements ByteBuf {
     private int position;
     private int limit;
 
-    public CompositeByteBuf(final List<ByteBuf> buffers) {
+    CompositeByteBuf(final List<ByteBuf> buffers) {
         notNull("buffers", buffers);
         isTrueArgument("buffer list not empty", !buffers.isEmpty());
         components = new ArrayList<Component>(buffers.size());
 
         int offset = 0;
         for (ByteBuf cur : buffers) {
-            Component component = new Component(cur.duplicate().order(ByteOrder.LITTLE_ENDIAN), offset);
+            Component component = new Component(cur.asReadOnly().order(ByteOrder.LITTLE_ENDIAN), offset);
             components.add(component);
             offset = component.endOffset;
         }
@@ -255,7 +256,7 @@ class CompositeByteBuf implements ByteBuf {
     public ByteBuffer asNIO() {
         if (components.size() == 1) {
             ByteBuffer byteBuffer = components.get(0).buffer.asNIO().duplicate();
-            byteBuffer.position(position).limit(limit);
+            ((Buffer) byteBuffer).position(position).limit(limit);
             return byteBuffer;
         } else {
            byte[] bytes = new byte[remaining()];

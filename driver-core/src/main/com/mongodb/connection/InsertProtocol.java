@@ -25,7 +25,6 @@ import com.mongodb.diagnostics.logging.Logger;
 import com.mongodb.diagnostics.logging.Loggers;
 import org.bson.BsonArray;
 import org.bson.BsonDocument;
-import org.bson.BsonInt32;
 
 import java.util.List;
 
@@ -42,16 +41,8 @@ class InsertProtocol extends WriteProtocol {
 
     private final List<InsertRequest> insertRequestList;
 
-    /**
-     * Construct a new instance.
-     *
-     * @param namespace         the namespace
-     * @param ordered           whether the inserts are ordered
-     * @param writeConcern      the write concern
-     * @param insertRequestList the list of documents to insert
-     */
-    public InsertProtocol(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
-                          final List<InsertRequest> insertRequestList) {
+    InsertProtocol(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+                   final List<InsertRequest> insertRequestList) {
         super(namespace, ordered, writeConcern);
         this.insertRequestList = insertRequestList;
     }
@@ -103,14 +94,6 @@ class InsertProtocol extends WriteProtocol {
 
     protected RequestMessage createRequestMessage(final MessageSettings settings) {
         return new InsertMessage(getNamespace().getFullName(), isOrdered(), getWriteConcern(), insertRequestList, settings);
-    }
-
-    @Override
-    protected void appendToWriteCommandResponseDocument(final RequestMessage curMessage, final RequestMessage nextMessage,
-                                                        final WriteConcernResult writeConcernResult, final BsonDocument response) {
-        response.append("n", new BsonInt32(nextMessage == null ? ((InsertMessage) curMessage).getInsertRequestList().size()
-                                                               : ((InsertMessage) curMessage).getInsertRequestList().size()
-                                                                 - ((InsertMessage) nextMessage).getInsertRequestList().size()));
     }
 
     @Override

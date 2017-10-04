@@ -23,17 +23,13 @@ import java.io.Closeable;
 class ResponseBuffers implements Closeable {
     private final ReplyHeader replyHeader;
     private final ByteBuf bodyByteBuffer;
+    private final int bodyByteBufferStartPosition;
     private volatile boolean isClosed;
 
-    /**
-     * Construct an instance.
-     *
-     * @param replyHeader the reply header
-     * @param bodyByteBuffer a byte buffer containing the message body
-     */
-    public ResponseBuffers(final ReplyHeader replyHeader, final ByteBuf bodyByteBuffer) {
+    ResponseBuffers(final ReplyHeader replyHeader, final ByteBuf bodyByteBuffer) {
         this.replyHeader = replyHeader;
         this.bodyByteBuffer = bodyByteBuffer;
+        this.bodyByteBufferStartPosition = bodyByteBuffer == null ? 0 : bodyByteBuffer.position();
     }
 
     /**
@@ -56,7 +52,7 @@ class ResponseBuffers implements Closeable {
     }
 
     public void reset() {
-        bodyByteBuffer.position(0);
+        bodyByteBuffer.position(bodyByteBufferStartPosition);
     }
 
     @Override

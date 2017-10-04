@@ -26,14 +26,14 @@ import org.bson.codecs.DecoderContext;
 import org.bson.codecs.EncoderContext;
 import org.bson.io.BasicOutputBuffer;
 import org.bson.io.BsonInput;
-import org.bson.io.ByteBufferBsonInput;
 import org.bson.io.OutputBuffer;
 import org.bson.json.JsonReader;
-import org.bson.json.JsonWriter;
 
-import java.io.StringWriter;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+
+import static com.mongodb.connection.ConnectionDescription.getDefaultMaxMessageSize;
 
 final class MessageHelper {
 
@@ -76,13 +76,13 @@ final class MessageHelper {
         headerByteBuffer.putLong(0); // cursorId
         headerByteBuffer.putInt(0); // startingFrom
         headerByteBuffer.putInt(numDocuments); //numberReturned
-        headerByteBuffer.flip();
+        ((Buffer) headerByteBuffer).flip();
 
-        ByteBufferBsonInput headerInputBuffer = new ByteBufferBsonInput(new ByteBufNIO(headerByteBuffer));
-        return new ReplyHeader(headerInputBuffer, ConnectionDescription.getDefaultMaxMessageSize());
+        ByteBufNIO buffer = new ByteBufNIO(headerByteBuffer);
+        return new ReplyHeader(buffer, new MessageHeader(buffer, getDefaultMaxMessageSize()));
     }
 
-    public static String decodeCommandAsJson(final BsonInput bsonInput) {
+    public static BsonDocument decodeCommand(final BsonInput bsonInput) {
         bsonInput.readInt32(); // length
         bsonInput.readInt32(); //requestId
         bsonInput.readInt32(); //responseTo
@@ -93,12 +93,11 @@ final class MessageHelper {
         bsonInput.readInt32(); // numToReturn
 
         BsonBinaryReader reader = new BsonBinaryReader(bsonInput);
-        BsonDocumentCodec codec = new BsonDocumentCodec();
-        BsonDocument document = codec.decode(reader, DecoderContext.builder().build());
-        StringWriter writer = new StringWriter();
-        JsonWriter jsonWriter = new JsonWriter(writer);
-        codec.encode(jsonWriter, document, EncoderContext.builder().build());
-        return writer.toString();
+        return new BsonDocumentCodec().decode(reader, DecoderContext.builder().build());
+    }
+
+    public static String decodeCommandAsJson(final BsonInput bsonInput) {
+        return decodeCommand(bsonInput).toJson();
     }
 
     private static ByteBuf encodeJson(final String json) {

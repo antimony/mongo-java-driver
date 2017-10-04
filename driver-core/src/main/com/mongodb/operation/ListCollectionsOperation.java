@@ -238,7 +238,7 @@ public class ListCollectionsOperation<T> implements AsyncReadOperation<AsyncBatc
     }
 
     private AsyncBatchCursor<T> emptyAsyncCursor(final AsyncConnectionSource source) {
-        return createEmptyAsyncBatchCursor(createNamespace(), decoder, source.getServerDescription().getAddress(), batchSize);
+        return createEmptyAsyncBatchCursor(createNamespace(), source.getServerDescription().getAddress());
     }
 
     private MongoNamespace createNamespace() {
@@ -382,6 +382,20 @@ public class ListCollectionsOperation<T> implements AsyncReadOperation<AsyncBatc
         @Override
         public void next(final SingleResultCallback<List<T>> callback) {
             delegate.next(new SingleResultCallback<List<BsonDocument>>() {
+                @Override
+                public void onResult(final List<BsonDocument> result, final Throwable t) {
+                    if (t != null) {
+                        callback.onResult(null, t);
+                    } else {
+                        callback.onResult(projectFromFullNamespaceToCollectionName(result), null);
+                    }
+                }
+            });
+        }
+
+        @Override
+        public void tryNext(final SingleResultCallback<List<T>> callback) {
+            delegate.tryNext(new SingleResultCallback<List<BsonDocument>>() {
                 @Override
                 public void onResult(final List<BsonDocument> result, final Throwable t) {
                     if (t != null) {

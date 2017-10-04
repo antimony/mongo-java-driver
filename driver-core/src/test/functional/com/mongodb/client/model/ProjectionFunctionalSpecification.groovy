@@ -20,9 +20,7 @@ import com.mongodb.MongoQueryException
 import com.mongodb.OperationFunctionalSpecification
 import org.bson.Document
 import org.bson.conversions.Bson
-import spock.lang.IgnoreIf
 
-import static com.mongodb.ClusterFixture.serverVersionAtLeast
 import static com.mongodb.client.model.Filters.and
 import static com.mongodb.client.model.Filters.eq
 import static com.mongodb.client.model.Projections.elemMatch
@@ -52,7 +50,6 @@ class ProjectionFunctionalSpecification extends OperationFunctionalSpecification
 
     def setup() {
         getCollectionHelper().insertDocuments(a)
-        getCollectionHelper().createIndex(new Document('y', 'text'))
     }
 
     def 'find'(Bson projection) {
@@ -99,8 +96,10 @@ class ProjectionFunctionalSpecification extends OperationFunctionalSpecification
         find(slice('y', 1, 2)) == [aYSlice12]
     }
 
-    @IgnoreIf({ !serverVersionAtLeast([2, 6, 0]) })
     def 'metaTextScore'() {
+        given:
+        getCollectionHelper().createIndex(new Document('y', 'text'))
+
         expect:
         find(metaTextScore('score')) == [aWithScore]
     }

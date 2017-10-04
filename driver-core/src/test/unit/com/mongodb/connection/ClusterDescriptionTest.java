@@ -43,6 +43,7 @@ import static com.mongodb.connection.ServerType.REPLICA_SET_SECONDARY;
 import static java.util.Arrays.asList;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -97,6 +98,22 @@ public class ClusterDescriptionTest {
     }
 
     @Test
+    public void testSettings() {
+        ClusterDescription description = new ClusterDescription(MULTIPLE, UNKNOWN, Collections.<ServerDescription>emptyList());
+        assertNull(description.getClusterSettings());
+        assertNull(description.getServerSettings());
+
+        ClusterDescription descriptionWithSettings = new ClusterDescription(MULTIPLE, UNKNOWN, Collections.<ServerDescription>emptyList(),
+                                                                                   ClusterSettings.builder()
+                                                                                           .hosts(asList(new ServerAddress()))
+                                                                                           .build(),
+                                                                                   ServerSettings.builder().build());
+        assertNotNull(descriptionWithSettings.getClusterSettings());
+        assertNotNull(descriptionWithSettings.getServerSettings());
+    }
+
+    @Test
+    @SuppressWarnings("deprecation")
     public void testAll() {
         ClusterDescription description = new ClusterDescription(MULTIPLE, UNKNOWN, Collections.<ServerDescription>emptyList());
         assertTrue(description.getAll().isEmpty());
@@ -105,11 +122,18 @@ public class ClusterDescriptionTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void testAny() throws UnknownHostException {
-        assertEquals(asList(primary, secondary, uninitiatedMember, otherSecondary), cluster.getAny());
+        List<ServerDescription> any = cluster.getAny();
+        assertEquals(4, any.size());
+        assertTrue(any.contains(primary));
+        assertTrue(any.contains(secondary));
+        assertTrue(any.contains(uninitiatedMember));
+        assertTrue(any.contains(otherSecondary));
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void testPrimaryOrSecondary() throws UnknownHostException {
         assertEquals(asList(primary, secondary, otherSecondary), cluster.getAnyPrimaryOrSecondary());
         assertEquals(asList(primary, secondary), cluster.getAnyPrimaryOrSecondary(new TagSet(asList(new Tag("foo", "1"),
@@ -134,12 +158,14 @@ public class ClusterDescriptionTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void getByServerAddress() throws UnknownHostException {
         assertEquals(primary, cluster.getByServerAddress(primary.getAddress()));
         assertNull(cluster.getByServerAddress(notOkMember.getAddress()));
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void testSortingOfAll() throws UnknownHostException {
         ClusterDescription description =
         new ClusterDescription(MULTIPLE, UNKNOWN, asList(
@@ -212,14 +238,17 @@ public class ClusterDescriptionTest {
                                                         builder()
                                                         .state(CONNECTING)
                                                         .address(new ServerAddress("loc:27019"))
+                                                        .lastUpdateTimeNanos(42L)
                                                         .build(),
                                                         builder()
                                                         .state(CONNECTING)
                                                         .address(new ServerAddress("loc:27018"))
+                                                        .lastUpdateTimeNanos(42L)
                                                         .build(),
                                                         builder()
                                                         .state(CONNECTING)
                                                         .address(new ServerAddress("loc:27017"))
+                                                        .lastUpdateTimeNanos(42L)
                                                         .build())
         );
         ClusterDescription descriptionTwo =
@@ -227,14 +256,17 @@ public class ClusterDescriptionTest {
                                                         builder()
                                                         .state(CONNECTING)
                                                         .address(new ServerAddress("loc:27019"))
+                                                        .lastUpdateTimeNanos(42L)
                                                         .build(),
                                                         builder()
                                                         .state(CONNECTING)
                                                         .address(new ServerAddress("loc:27018"))
+                                                        .lastUpdateTimeNanos(42L)
                                                         .build(),
                                                         builder()
                                                         .state(CONNECTING)
                                                         .address(new ServerAddress("loc:27017"))
+                                                        .lastUpdateTimeNanos(42L)
                                                         .build())
         );
         assertEquals(description, descriptionTwo);

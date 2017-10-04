@@ -42,7 +42,9 @@ import static java.lang.String.format;
 public class ClusterDescription {
     private final ClusterConnectionMode connectionMode;
     private final ClusterType type;
-    private final Set<ServerDescription> all;
+    private final List<ServerDescription> serverDescriptions;
+    private final ClusterSettings clusterSettings;
+    private final ServerSettings serverSettings;
 
     /**
      * Creates a new ClusterDescription.
@@ -53,26 +55,49 @@ public class ClusterDescription {
      */
     public ClusterDescription(final ClusterConnectionMode connectionMode, final ClusterType type,
                               final List<ServerDescription> serverDescriptions) {
+        this(connectionMode, type, serverDescriptions, null, null);
+    }
+
+    /**
+     * Creates a new ClusterDescription.
+     *
+     * @param connectionMode     whether to connect directly to a single server or to multiple servers
+     * @param type               what sort of cluster this is
+     * @param serverDescriptions the descriptions of all the servers currently in this cluster
+     * @param clusterSettings    the cluster settings
+     * @param serverSettings     the server settings
+     * @since 3.4
+     */
+    public ClusterDescription(final ClusterConnectionMode connectionMode, final ClusterType type,
+                              final List<ServerDescription> serverDescriptions,
+                              final ClusterSettings clusterSettings,
+                              final ServerSettings serverSettings) {
         notNull("all", serverDescriptions);
         this.connectionMode = notNull("connectionMode", connectionMode);
-        this.type = notNull("type",
-                            type);
-        Set<ServerDescription> serverDescriptionSet = new TreeSet<ServerDescription>(new Comparator<ServerDescription>() {
-            @Override
-            public int compare(final ServerDescription o1, final ServerDescription o2) {
-                int val = o1.getAddress().getHost().compareTo(o2.getAddress().getHost());
-                if (val != 0) {
-                    return val;
-                }
-                return integerCompare(o1.getAddress().getPort(), o2.getAddress().getPort());
-            }
+        this.type = notNull("type", type);
+        this.serverDescriptions = new ArrayList<ServerDescription>(serverDescriptions);
+        this.clusterSettings = clusterSettings;
+        this.serverSettings = serverSettings;
+    }
 
-            private int integerCompare(final int p1, final int p2) {
-                return (p1 < p2) ? -1 : ((p1 == p2) ? 0 : 1);
-            }
-        });
-        serverDescriptionSet.addAll(serverDescriptions);
-        this.all = Collections.unmodifiableSet(serverDescriptionSet);
+    /**
+     * Gets the cluster settings, which may be null if not provided.
+     *
+     * @return the cluster settings
+     * @since 3.4
+     */
+    public ClusterSettings getClusterSettings() {
+        return clusterSettings;
+    }
+
+    /**
+     * Gets the server settings, which may be null if not provided.
+     *
+     * @return the server settings
+     * @since 3.4
+     */
+    public ServerSettings getServerSettings() {
+        return serverSettings;
     }
 
     /**
@@ -81,7 +106,7 @@ public class ClusterDescription {
      * @return true if the cluster is compatible with the driver.
      */
     public boolean isCompatibleWithDriver() {
-        for (final ServerDescription cur : all) {
+        for (final ServerDescription cur : serverDescriptions) {
             if (!cur.isCompatibleWithDriver()) {
                 return false;
             }
@@ -132,12 +157,62 @@ public class ClusterDescription {
     }
 
     /**
+     * Returns an unmodifiable list of the server descriptions in this cluster description.
+     *
+     * @return an unmodifiable list of the server descriptions in this cluster description
+     * @since 3.3
+     */
+    public List<ServerDescription> getServerDescriptions() {
+        return Collections.unmodifiableList(serverDescriptions);
+    }
+
+    /**
+     * Gets the logical session timeout in minutes, or null if at least one of the known servers does not support logical sessions.
+     *
+     * @return the logical session timeout in minutes, which may be null
+     * @mongodb.server.release 3.6
+     * @since 3.6
+     */
+    public Integer getLogicalSessionTimeoutMinutes() {
+        Integer retVal = null;
+        for (ServerDescription cur : getServersByPredicate(new Predicate() {
+            @Override
+            public boolean apply(final ServerDescription serverDescription) {
+                return serverDescription.isOk();
+            }
+        })) {
+            if (cur.getLogicalSessionTimeoutMinutes() == null) {
+                return null;
+            }
+            retVal = cur.getLogicalSessionTimeoutMinutes();
+        }
+        return retVal;
+    }
+
+    /**
      * Returns the Set of all server descriptions in this cluster, sorted by the String value of the ServerAddress of each one.
      *
      * @return the set of server descriptions
+     * @deprecated Use {@link #getServerDescriptions()} instead
      */
+    @Deprecated
     public Set<ServerDescription> getAll() {
-        return all;
+        Set<ServerDescription> serverDescriptionSet = new TreeSet<ServerDescription>(new Comparator<ServerDescription>() {
+            @Override
+            public int compare(final ServerDescription o1, final ServerDescription o2) {
+                int val = o1.getAddress().getHost().compareTo(o2.getAddress().getHost());
+                if (val != 0) {
+                    return val;
+                }
+                return integerCompare(o1.getAddress().getPort(), o2.getAddress().getPort());
+            }
+
+            private int integerCompare(final int p1, final int p2) {
+                return (p1 < p2) ? -1 : ((p1 == p2) ? 0 : 1);
+            }
+        });
+        serverDescriptionSet.addAll(serverDescriptions);
+        return Collections.unmodifiableSet(serverDescriptionSet);
     }
 
     /**
@@ -145,9 +220,11 @@ public class ClusterDescription {
      *
      * @param serverAddress the ServerAddress for a server in this cluster
      * @return the ServerDescription for this server
+     * @deprecated Replace with a filter on ServerDescription in the caller
      */
+    @Deprecated
     public ServerDescription getByServerAddress(final ServerAddress serverAddress) {
-        for (final ServerDescription cur : getAll()) {
+        for (final ServerDescription cur : serverDescriptions) {
             if (cur.isOk() && cur.getAddress().equals(serverAddress)) {
                 return cur;
             }
@@ -160,7 +237,9 @@ public class ClusterDescription {
      * of the cluster is a set of mongos servers, any of which can serve as the primary.
      *
      * @return a list of servers that can act as primaries
+     * @deprecated Replace with a filter on ServerDescription in the caller
      */
+    @Deprecated
     public List<ServerDescription> getPrimaries() {
         return getServersByPredicate(new Predicate() {
             public boolean apply(final ServerDescription serverDescription) {
@@ -173,7 +252,9 @@ public class ClusterDescription {
      * Get a list of all the secondaries in this cluster
      *
      * @return a List of ServerDescriptions of all the secondaries this cluster is currently aware of
+     * @deprecated Replace with a filter on ServerDescription in the caller
      */
+    @Deprecated
     public List<ServerDescription> getSecondaries() {
         return getServersByPredicate(new Predicate() {
             public boolean apply(final ServerDescription serverDescription) {
@@ -187,7 +268,9 @@ public class ClusterDescription {
      *
      * @param tagSet a Set of replica set tags
      * @return a List of ServerDescriptions of all the secondaries this cluster that match all of the given tags
+     * @deprecated Replace with a filter on ServerDescription in the caller
      */
+    @Deprecated
     public List<ServerDescription> getSecondaries(final TagSet tagSet) {
         return getServersByPredicate(new Predicate() {
             public boolean apply(final ServerDescription serverDescription) {
@@ -200,7 +283,9 @@ public class ClusterDescription {
      * Gets a list of ServerDescriptions for all the servers in this cluster which are currently accessible.
      *
      * @return a List of ServerDescriptions for all servers that have a status of OK
+     * @deprecated Replace with a filter on ServerDescription in the caller
      */
+    @Deprecated
     public List<ServerDescription> getAny() {
         return getServersByPredicate(new Predicate() {
             public boolean apply(final ServerDescription serverDescription) {
@@ -213,7 +298,9 @@ public class ClusterDescription {
      * Gets a list of all the primaries and secondaries in this cluster.
      *
      * @return a list of ServerDescriptions for all primary and secondary servers
+     * @deprecated Replace with a filter on ServerDescription in the caller
      */
+    @Deprecated
     public List<ServerDescription> getAnyPrimaryOrSecondary() {
         return getServersByPredicate(new Predicate() {
             public boolean apply(final ServerDescription serverDescription) {
@@ -227,7 +314,9 @@ public class ClusterDescription {
      *
      * @param tagSet a Set of replica set tags
      * @return a list of ServerDescriptions for all primary and secondary servers that contain all of the given tags
+     * @deprecated Replace with a filter on ServerDescription in the caller
      */
+    @Deprecated
     public List<ServerDescription> getAnyPrimaryOrSecondary(final TagSet tagSet) {
         return getServersByPredicate(new Predicate() {
             public boolean apply(final ServerDescription serverDescription) {
@@ -253,7 +342,11 @@ public class ClusterDescription {
         if (type != that.type) {
             return false;
         }
-        if (!all.equals(that.all)) {
+        if (serverDescriptions.size() != that.serverDescriptions.size()) {
+            return false;
+        }
+
+        if (!serverDescriptions.containsAll(that.serverDescriptions)) {
             return false;
         }
 
@@ -264,7 +357,7 @@ public class ClusterDescription {
     public int hashCode() {
         int result = connectionMode.hashCode();
         result = 31 * result + type.hashCode();
-        result = 31 * result + all.hashCode();
+        result = 31 * result + serverDescriptions.hashCode();
         return result;
     }
 
@@ -273,7 +366,7 @@ public class ClusterDescription {
         return "ClusterDescription{"
                + "type=" + getType()
                + ", connectionMode=" + connectionMode
-               + ", all=" + all
+               + ", serverDescriptions=" + serverDescriptions
                + '}';
     }
 
@@ -285,7 +378,7 @@ public class ClusterDescription {
     public String getShortDescription() {
         StringBuilder serverDescriptions = new StringBuilder();
         String delimiter = "";
-        for (final ServerDescription cur : all) {
+        for (final ServerDescription cur : this.serverDescriptions) {
             serverDescriptions.append(delimiter).append(cur.getShortDescription());
             delimiter = ", ";
         }
@@ -299,7 +392,7 @@ public class ClusterDescription {
     private List<ServerDescription> getServersByPredicate(final Predicate predicate) {
         List<ServerDescription> membersByTag = new ArrayList<ServerDescription>();
 
-        for (final ServerDescription cur : all) {
+        for (final ServerDescription cur : serverDescriptions) {
             if (predicate.apply(cur)) {
                 membersByTag.add(cur);
             }

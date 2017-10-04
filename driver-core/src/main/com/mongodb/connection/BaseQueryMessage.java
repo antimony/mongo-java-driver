@@ -23,7 +23,7 @@ import org.bson.io.BsonOutput;
  *
  * @mongodb.driver.manual ../meta-driver/latest/legacy/mongodb-wire-protocol/#op-query OP_QUERY
  */
-abstract class BaseQueryMessage extends RequestMessage {
+abstract class BaseQueryMessage extends LegacyMessage {
     private final int skip;
     private final int numberToReturn;
     private boolean tailableCursor;
@@ -33,15 +33,7 @@ abstract class BaseQueryMessage extends RequestMessage {
     private boolean awaitData;
     private boolean partial;
 
-    /**
-     * Construct an instance.
-     *
-     * @param collectionName the collection name
-     * @param skip           the number of documents to skip
-     * @param numberToReturn the number of documents to return
-     * @param settings       the message settings
-     */
-    public BaseQueryMessage(final String collectionName, final int skip, final int numberToReturn, final MessageSettings settings) {
+    BaseQueryMessage(final String collectionName, final int skip, final int numberToReturn, final MessageSettings settings) {
         super(collectionName, OpCode.OP_QUERY, settings);
         this.skip = skip;
         this.numberToReturn = numberToReturn;

@@ -30,11 +30,20 @@ import static com.mongodb.connection.ServerConnectionState.CONNECTING
 import static com.mongodb.connection.ServerType.STANDALONE
 import static java.util.concurrent.TimeUnit.SECONDS
 
+@SuppressWarnings('deprecation')
 class SingleServerClusterSpecification extends Specification {
     private static final ClusterId CLUSTER_ID = new ClusterId()
     private final ServerAddress firstServer = new ServerAddress('localhost:27017')
 
     private final TestClusterableServerFactory factory = new TestClusterableServerFactory()
+
+    def setup() {
+        Time.makeTimeConstant()
+    }
+
+    def cleanup() {
+        Time.makeTimeMove()
+    }
 
     def 'should update description when the server connects'() {
         given:
@@ -138,11 +147,8 @@ class SingleServerClusterSpecification extends Specification {
 
     def 'getServer should throw when cluster is incompatible'() {
         given:
-        def cluster = new SingleServerCluster(CLUSTER_ID,
-                ClusterSettings.builder().mode(SINGLE).hosts(Arrays.asList(firstServer))
-                        .serverSelectionTimeout(1, SECONDS)
-                        .build(),
-                factory)
+        def cluster = new SingleServerCluster(CLUSTER_ID, ClusterSettings.builder().mode(SINGLE).hosts(Arrays.asList(firstServer))
+                        .serverSelectionTimeout(1, SECONDS).build(), factory)
         sendNotification(firstServer, getBuilder(firstServer).minWireVersion(1000).maxWireVersion(1000).build())
 
         when:
@@ -157,10 +163,7 @@ class SingleServerClusterSpecification extends Specification {
 
     def 'should connect to server'() {
         given:
-        def cluster = new SingleServerCluster(CLUSTER_ID,
-                ClusterSettings.builder()
-                        .mode(SINGLE)
-                        .hosts([firstServer]).build(),
+        def cluster = new SingleServerCluster(CLUSTER_ID, ClusterSettings.builder().mode(SINGLE).hosts([firstServer]).build(),
                 factory)
 
         when:
@@ -183,10 +186,8 @@ class SingleServerClusterSpecification extends Specification {
                 [ServerDescription.builder().state(CONNECTING).address(firstServer).build()])
         def listener = Mock(ClusterListener)
         when:
-        def cluster = new SingleServerCluster(CLUSTER_ID,
-                ClusterSettings.builder().mode(SINGLE).hosts([firstServer])
-                        .addClusterListener(listener)
-                        .build(),
+        def cluster = new SingleServerCluster(CLUSTER_ID, ClusterSettings.builder().mode(SINGLE).hosts([firstServer])
+                .addClusterListener(listener).build(),
                 factory)
 
         then:

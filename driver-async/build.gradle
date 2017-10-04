@@ -21,7 +21,7 @@ def configDir = new File(rootDir, 'config')
 archivesBaseName = 'mongodb-driver-async'
 
 sourceSets {
-    test.java.srcDirs += 'src/examples'
+    test.groovy.srcDirs += 'src/examples'
 }
 
 dependencies {
@@ -34,13 +34,23 @@ dependencies {
 
 clirr {
     excludeFilter = new File("$configDir/clirr-exclude.yml")
-    baseline 'org.mongodb:mongodb-driver-async:3.2.0'
+    baseline 'org.mongodb:mongodb-driver-async:3.4.0'
     failOnErrors = false
 }
 
 tasks.withType(Checkstyle) {
     // needed so the Javadoc checks can find the code in other modules
-    classpath = files(project(':driver-core').sourceSets.main.output, sourceSets.main.output);
+    classpath = files(project(':driver-core').sourceSets.main.output, sourceSets.main.output)
+}
+
+jar {
+    manifest {
+        instruction 'Build-Version', getGitVersion()
+        instruction 'Import-Package',
+                'org.bson.*',
+                'com.mongodb.*',
+                'io.netty.*;resolution:=optional'
+    }
 }
 
 modifyPom {

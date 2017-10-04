@@ -23,18 +23,11 @@ import org.bson.io.BsonOutput;
  *
  * @mongodb.driver.manual ../meta-driver/latest/legacy/mongodb-wire-protocol/#op-get-more OP_GET_MORE
  */
-class GetMoreMessage extends RequestMessage {
+class GetMoreMessage extends LegacyMessage {
     private final long cursorId;
     private final int numberToReturn;
 
-    /**
-     * Construct an instance.
-     *
-     * @param collectionName the collection name
-     * @param cursorId       the cursor id
-     * @param numberToReturn the number of documents to return
-     */
-    public GetMoreMessage(final String collectionName, final long cursorId, final int numberToReturn) {
+    GetMoreMessage(final String collectionName, final long cursorId, final int numberToReturn) {
         super(collectionName, OpCode.OP_GETMORE, MessageSettings.builder().build());
         this.cursorId = cursorId;
         this.numberToReturn = numberToReturn;
@@ -47,11 +40,6 @@ class GetMoreMessage extends RequestMessage {
      */
     public long getCursorId() {
         return cursorId;
-    }
-
-    @Override
-    protected RequestMessage encodeMessageBody(final BsonOutput bsonOutput, final int messageStartPosition) {
-        return encodeMessageBodyWithMetadata(bsonOutput, messageStartPosition).getNextMessage();
     }
 
     @Override

@@ -16,17 +16,19 @@
 
 package com.mongodb.connection;
 
+import com.mongodb.MongoCompressor;
 import com.mongodb.selector.ServerSelector;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static com.mongodb.ClusterFixture.getCredentialList;
 import static com.mongodb.ClusterFixture.getPrimary;
 import static com.mongodb.ClusterFixture.getSslSettings;
+import static java.util.Collections.singletonList;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -40,18 +42,16 @@ public class SingleServerClusterTest {
         ClusterId clusterId = new ClusterId();
         ClusterSettings clusterSettings = ClusterSettings.builder()
                                                .mode(ClusterConnectionMode.SINGLE)
-                                               .hosts(Arrays.asList(getPrimary()))
+                                               .hosts(singletonList(getPrimary()))
                                                .build();
         cluster = new SingleServerCluster(clusterId,
                                           clusterSettings,
                                           new DefaultClusterableServerFactory(clusterId, clusterSettings, ServerSettings.builder().build(),
                                                                               ConnectionPoolSettings.builder().maxSize(1).build(),
-                                                                              streamFactory,
-                                                                              streamFactory,
-                                                                              getCredentialList(),
-                                                                                     new NoOpConnectionListener(),
-                                                                              new NoOpConnectionPoolListener(), null)
-        );
+                                                                              streamFactory, streamFactory, getCredentialList(),
+
+                                                                              null, null, null,
+                                                                              Collections.<MongoCompressor>emptyList()));
     }
 
     @After
@@ -65,6 +65,13 @@ public class SingleServerClusterTest {
     }
 
     @Test
+    public void descriptionShouldIncludeSettings() {
+        assertNotNull(cluster.getDescription().getClusterSettings());
+        assertNotNull(cluster.getDescription().getServerSettings());
+    }
+
+    @Test
+    @SuppressWarnings("deprecation")
     public void shouldGetServerWithOkDescription() throws InterruptedException {
         Server server = cluster.selectServer(new ServerSelector() {
             @Override

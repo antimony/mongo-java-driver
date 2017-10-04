@@ -16,27 +16,28 @@
 
 package com.mongodb.async.client;
 
+import com.mongodb.MongoCompressor;
 import com.mongodb.MongoCredential;
 import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
 import com.mongodb.WriteConcern;
 import com.mongodb.annotations.Immutable;
 import com.mongodb.annotations.NotThreadSafe;
-import com.mongodb.connection.AsynchronousSocketChannelStreamFactoryFactory;
 import com.mongodb.connection.ClusterSettings;
 import com.mongodb.connection.ConnectionPoolSettings;
 import com.mongodb.connection.ServerSettings;
 import com.mongodb.connection.SocketSettings;
 import com.mongodb.connection.SslSettings;
 import com.mongodb.connection.StreamFactoryFactory;
-import com.mongodb.connection.netty.NettyStreamFactoryFactory;
 import com.mongodb.event.CommandListener;
 import org.bson.codecs.configuration.CodecRegistry;
 
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import static com.mongodb.assertions.Assertions.isTrueArgument;
 import static com.mongodb.assertions.Assertions.notNull;
 
 
@@ -62,6 +63,8 @@ public final class MongoClientSettings {
     private final ConnectionPoolSettings connectionPoolSettings;
     private final ServerSettings serverSettings;
     private final SslSettings sslSettings;
+    private final String applicationName;
+    private final List<MongoCompressor> compressorList;
 
     /**
      * Convenience method to create a Builder.
@@ -92,7 +95,7 @@ public final class MongoClientSettings {
         private WriteConcern writeConcern = WriteConcern.ACKNOWLEDGED;
         private ReadConcern readConcern = ReadConcern.DEFAULT;
         private CodecRegistry codecRegistry = MongoClients.getDefaultCodecRegistry();
-        private StreamFactoryFactory streamFactoryFactory = createDefaultStreamFactoryFactory();
+        private StreamFactoryFactory streamFactoryFactory;
         private final List<CommandListener> commandListeners = new ArrayList<CommandListener>();
 
         private ClusterSettings clusterSettings;
@@ -105,6 +108,8 @@ public final class MongoClientSettings {
         private ServerSettings serverSettings = ServerSettings.builder().build();
         private SslSettings sslSettings = SslSettings.builder().build();
         private List<MongoCredential> credentialList = Collections.emptyList();
+        private String applicationName;
+        private List<MongoCompressor> compressorList = Collections.emptyList();
 
         private Builder() {
         }
@@ -129,6 +134,8 @@ public final class MongoClientSettings {
             heartbeatSocketSettings = settings.getHeartbeatSocketSettings();
             connectionPoolSettings = settings.getConnectionPoolSettings();
             sslSettings = settings.getSslSettings();
+            applicationName = settings.getApplicationName();
+            compressorList = settings.getCompressorList();
         }
 
         /**
@@ -292,6 +299,43 @@ public final class MongoClientSettings {
             return this;
         }
 
+
+        /**
+         * Sets the logical name of the application using this MongoClient.  The application name may be used by the client to identify
+         * the application to the server, for use in server logs, slow query logs, and profile collection.
+         *
+         * @param applicationName the logical name of the application using this MongoClient.  It may be null.
+         *                        The UTF-8 encoding may not exceed 128 bytes.
+         * @return {@code this}
+         * @see #getApplicationName()
+         * @since 3.4
+         * @mongodb.server.release 3.4
+         */
+        public Builder applicationName(final String applicationName) {
+            if (applicationName != null) {
+                isTrueArgument("applicationName UTF-8 encoding length <= 128",
+                        applicationName.getBytes(Charset.forName("UTF-8")).length <= 128);
+            }
+            this.applicationName = applicationName;
+            return this;
+        }
+
+        /**
+         * Sets the compressors to use for compressing messages to the server. The driver will use the first compressor in the list
+         * that the server is configured to support.
+         *
+         * @param compressorList the list of compressors to request
+         * @return {@code this}
+         * @see #getCompressorList() ()
+         * @since 3.6
+         * @mongodb.server.release 3.4
+         */
+        public Builder compressorList(final List<MongoCompressor> compressorList) {
+            notNull("compressorList", compressorList);
+            this.compressorList = compressorList;
+            return this;
+        }
+
         /**
          * Build an instance of {@code MongoClientSettings}.
          *
@@ -299,18 +343,6 @@ public final class MongoClientSettings {
          */
         public MongoClientSettings build() {
             return new MongoClientSettings(this);
-        }
-
-        private static StreamFactoryFactory createDefaultStreamFactoryFactory() {
-            String streamType = System.getProperty("org.mongodb.async.type", "nio2");
-
-            if (streamType.equals("netty")) {
-                return new NettyStreamFactoryFactory();
-            } else if (streamType.equals("nio2")) {
-                return new AsynchronousSocketChannelStreamFactoryFactory();
-            } else {
-                throw new IllegalArgumentException("Unsupported stream type " + streamType);
-            }
         }
     }
 
@@ -392,6 +424,34 @@ public final class MongoClientSettings {
     }
 
     /**
+     * Gets the logical name of the application using this MongoClient.  The application name may be used by the client to identify
+     * the application to the server, for use in server logs, slow query logs, and profile collection.
+     *
+     * <p>Default is null.</p>
+     *
+     * @return the application name, which may be null
+     * @since 3.4
+     * @mongodb.server.release 3.4
+     */
+    public String getApplicationName() {
+        return applicationName;
+    }
+
+    /**
+     * Gets the compressors to use for compressing messages to the server. The driver will use the first compressor in the list
+     * that the server is configured to support.
+     *
+     * <p>Default is the empty list.</p>
+     *
+     * @return the compressors
+     * @since 3.6
+     * @mongodb.server.release 3.4
+     */
+    public List<MongoCompressor> getCompressorList() {
+        return compressorList;
+    }
+
+    /**
      * Gets the cluster settings.
      *
      * @return the cluster settings
@@ -463,11 +523,13 @@ public final class MongoClientSettings {
         streamFactoryFactory = builder.streamFactoryFactory;
         codecRegistry = builder.codecRegistry;
         commandListeners = builder.commandListeners;
+        applicationName = builder.applicationName;
         clusterSettings = builder.clusterSettings;
         serverSettings = builder.serverSettings;
         socketSettings = builder.socketSettings;
         heartbeatSocketSettings = builder.heartbeatSocketSettings;
         connectionPoolSettings = builder.connectionPoolSettings;
         sslSettings = builder.sslSettings;
+        compressorList = builder.compressorList;
     }
 }

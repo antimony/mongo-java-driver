@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-def configDir = new File(rootDir, 'config')
-
 apply plugin: 'idea'
 apply plugin: 'osgi'
 
@@ -24,7 +22,7 @@ archivesBaseName = 'mongo-java-driver'
 idea {
     module {
         sourceDirs = [] // Ignore in idea (prevents intellij crashing due to sources outside project dir)
-}
+    }
 }
 
 // dependencies copied from driver-core
@@ -32,6 +30,7 @@ dependencies {
     compile "io.netty:netty-buffer:$nettyVersion", optional
     compile "io.netty:netty-transport:$nettyVersion", optional
     compile "io.netty:netty-handler:$nettyVersion", optional
+    compile "org.xerial.snappy:snappy-java:$snappyVersion", optional
 }
 
 // srcDirs copied as well, so everything is compiled twice
@@ -46,17 +45,20 @@ sourceSets {
 // copied from driver-core
 jar {
     manifest {
+        instruction 'Build-Version', getGitVersion()
         instruction 'Import-Package',
                     'javax.xml.bind.*',
                     'javax.crypto.*',
                     'javax.crypto.spec.*',
                     'javax.management.*',
+                    'javax.naming.spi.*',
                     'javax.net.*',
                     'javax.net.ssl.*',
                     'javax.security.sasl.*',
                     'javax.security.auth.callback.*',
                     'org.ietf.jgss.*',
                     'io.netty.*;resolution:=optional',
+                    'org.xerial.snappy.*;resolution:=optional',
                     'org.slf4j;resolution:=optional'
     }
     }

@@ -141,6 +141,25 @@ public class Document implements Map<String, Object>, Serializable, Bson {
     }
 
     /**
+     * Gets the value of the given key, casting it to {@code Class<T>} or returning the default value if null.
+     * This is useful to avoid having casts in client code, though the effect is the same.
+     *
+     * @param key   the key
+     * @param defaultValue what to return if the value is null
+     * @param <T>   the type of the class
+     * @return the value of the given key, or null if the instance does not contain this key.
+     * @throws ClassCastException if the value of the given key is not of type T
+     * @since 3.5
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T get(final Object key, final T defaultValue) {
+        notNull("defaultValue", defaultValue);
+        Class<T> clazz = notNull("clazz", (Class<T>) defaultValue.getClass());
+        Object value = documentAsMap.get(key);
+        return value == null ? defaultValue : clazz.cast(value);
+    }
+
+    /**
      * Gets the value of the given key as an Integer.
      *
      * @param key the key
@@ -160,8 +179,7 @@ public class Document implements Map<String, Object>, Serializable, Bson {
      * @throws java.lang.ClassCastException if the value is not an integer
      */
     public int getInteger(final Object key, final int defaultValue) {
-        Object value = get(key);
-        return value == null ? defaultValue : (Integer) value;
+        return get(key, defaultValue);
     }
 
     /**
@@ -201,8 +219,8 @@ public class Document implements Map<String, Object>, Serializable, Bson {
      * Gets the value of the given key as a Boolean.
      *
      * @param key the key
-     * @return the value as a double, which may be null
-     * @throws java.lang.ClassCastException if the value is not an double
+     * @return the value as a Boolean, which may be null
+     * @throws java.lang.ClassCastException if the value is not an boolean
      */
     public Boolean getBoolean(final Object key) {
         return (Boolean) get(key);
@@ -213,12 +231,11 @@ public class Document implements Map<String, Object>, Serializable, Bson {
      *
      * @param key          the key
      * @param defaultValue what to return if the value is null
-     * @return the value as a double, which may be null
-     * @throws java.lang.ClassCastException if the value is not an double
+     * @return the value as a primitive boolean
+     * @throws java.lang.ClassCastException if the value is not a boolean
      */
     public boolean getBoolean(final Object key, final boolean defaultValue) {
-        Object value = get(key);
-        return value == null ? defaultValue : (Boolean) value;
+        return get(key, defaultValue);
     }
 
     /**
@@ -244,13 +261,15 @@ public class Document implements Map<String, Object>, Serializable, Bson {
     }
 
     /**
-     * Gets a JSON representation of this document
-     *
-     * <p>With the default {@link JsonWriterSettings} and {@link DocumentCodec}.</p>
+     * Gets a JSON representation of this document using the {@link org.bson.json.JsonMode#STRICT} output mode, and otherwise the default
+     * settings of {@link JsonWriterSettings.Builder} and {@link DocumentCodec}.
      *
      * @return a JSON representation of this document
      * @throws org.bson.codecs.configuration.CodecConfigurationException if the document contains types not in the default registry
+     * @see #toJson(JsonWriterSettings)
+     * @see JsonWriterSettings
      */
+    @SuppressWarnings("deprecation")
     public String toJson() {
         return toJson(new JsonWriterSettings());
     }
@@ -277,6 +296,7 @@ public class Document implements Map<String, Object>, Serializable, Bson {
      * @return a JSON representation of this document
      * @throws org.bson.codecs.configuration.CodecConfigurationException if the registry does not contain a codec for the document values.
      */
+    @SuppressWarnings("deprecation")
     public String toJson(final Encoder<Document> encoder) {
         return toJson(new JsonWriterSettings(), encoder);
     }

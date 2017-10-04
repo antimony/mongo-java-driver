@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,18 +19,19 @@ package com.mongodb.util;
 import com.mongodb.BasicDBObject;
 import com.mongodb.DBRef;
 import org.bson.BsonUndefined;
+import org.bson.internal.Base64;
 import org.bson.types.BSONTimestamp;
 import org.bson.types.BasicBSONList;
 import org.bson.types.Binary;
 import org.bson.types.Code;
 import org.bson.types.CodeWScope;
+import org.bson.types.Decimal128;
 import org.bson.types.MaxKey;
 import org.bson.types.MinKey;
 import org.bson.types.ObjectId;
 import org.bson.types.Symbol;
 import org.junit.Test;
 
-import javax.xml.bind.DatatypeConverter;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -44,6 +45,7 @@ import java.util.regex.Pattern;
 
 import static org.junit.Assert.assertEquals;
 
+@SuppressWarnings("deprecation")
 public class JSONSerializersTest {
 
     @Test
@@ -187,6 +189,12 @@ public class JSONSerializersTest {
         buf = new StringBuilder();
         serializer.serialize(uuid, buf);
         assertEquals("{ \"$uuid\" : \"" + uuid.toString() + "\"}", buf.toString());
+
+        // test Decimal128
+        Decimal128 decimal128 = Decimal128.parse("3.140");
+        buf = new StringBuilder();
+        serializer.serialize(decimal128, buf);
+        assertEquals("{ \"$numberDecimal\" : \"3.140\"}", buf.toString());
     }
 
     @Test
@@ -195,7 +203,7 @@ public class JSONSerializersTest {
 
         // test  BINARY
         byte[] b = {1, 2, 3, 4};
-        String base64 = DatatypeConverter.printBase64Binary(b);
+        String base64 = Base64.encode(b);
         StringBuilder buf = new StringBuilder();
         serializer.serialize(new Binary(b), buf);
         assertEquals("{ \"$binary\" : \"" + base64 + "\" , \"$type\" : 0}", buf.toString());

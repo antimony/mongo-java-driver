@@ -18,6 +18,7 @@ package com.mongodb.connection;
 
 import com.mongodb.async.SingleResultCallback;
 import org.bson.ByteBuf;
+import org.bson.codecs.Decoder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,12 +41,12 @@ class TestInternalConnectionFactory implements InternalConnectionFactory {
         return createdConnections.size();
     }
 
-    public static class TestInternalConnection implements InternalConnection {
+    static class TestInternalConnection implements InternalConnection {
         private final ServerId serverId;
         private boolean closed;
         private boolean opened;
 
-        public TestInternalConnection(final ServerId serverId) {
+        TestInternalConnection(final ServerId serverId) {
             this.serverId = serverId;
         }
 
@@ -81,6 +82,17 @@ class TestInternalConnectionFactory implements InternalConnectionFactory {
 
         @Override
         public void sendMessage(final List<ByteBuf> byteBuffers, final int lastRequestId) {
+        }
+
+        @Override
+        public <T> T sendAndReceive(final CommandMessage message, final Decoder<T> decoder, final SessionContext sessionContext) {
+            return null;
+        }
+
+        @Override
+        public <T> void sendAndReceiveAsync(final CommandMessage message, final Decoder<T> decoder,
+                                            final SessionContext sessionContext, final SingleResultCallback<T> callback) {
+            callback.onResult(null, null);
         }
 
         @Override

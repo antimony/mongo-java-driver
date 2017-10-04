@@ -18,6 +18,7 @@ package com.mongodb;
 
 import com.mongodb.client.ListDatabasesIterable;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.MongoDriverInformation;
 import com.mongodb.client.MongoIterable;
 import com.mongodb.client.gridfs.codecs.GridFSFileCodecProvider;
 import com.mongodb.client.model.geojson.codecs.GeoJsonCodecProvider;
@@ -26,12 +27,14 @@ import org.bson.Document;
 import org.bson.codecs.BsonValueCodecProvider;
 import org.bson.codecs.DocumentCodecProvider;
 import org.bson.codecs.IterableCodecProvider;
+import org.bson.codecs.MapCodecProvider;
 import org.bson.codecs.ValueCodecProvider;
 import org.bson.codecs.configuration.CodecRegistry;
 
 import java.io.Closeable;
 import java.util.List;
 
+import static com.mongodb.assertions.Assertions.notNull;
 import static java.util.Arrays.asList;
 import static org.bson.codecs.configuration.CodecRegistries.fromProviders;
 
@@ -83,22 +86,28 @@ public class MongoClient extends Mongo implements Closeable {
 
     private static final CodecRegistry DEFAULT_CODEC_REGISTRY =
             fromProviders(asList(new ValueCodecProvider(),
-                    new DBRefCodecProvider(),
-                    new DocumentCodecProvider(new DocumentToDBRefTransformer()),
-                    new DBObjectCodecProvider(),
                     new BsonValueCodecProvider(),
+                    new DBRefCodecProvider(),
+                    new DBObjectCodecProvider(),
+                    new DocumentCodecProvider(new DocumentToDBRefTransformer()),
                     new IterableCodecProvider(new DocumentToDBRefTransformer()),
+                    new MapCodecProvider(new DocumentToDBRefTransformer()),
                     new GeoJsonCodecProvider(),
                     new GridFSFileCodecProvider()));
 
     /**
      * Gets the default codec registry.  It includes the following providers:
+     *
      * <ul>
-     * <li>{@link org.bson.codecs.ValueCodecProvider}</li>
-     * <li>{@link org.bson.codecs.DocumentCodecProvider}</li>
-     * <li>{@link com.mongodb.DBObjectCodecProvider}</li>
-     * <li>{@link org.bson.codecs.BsonValueCodecProvider}</li>
-     * <li>{@link com.mongodb.client.model.geojson.codecs.GeoJsonCodecProvider}</li>
+     *     <li>{@link org.bson.codecs.ValueCodecProvider}</li>
+     *     <li>{@link org.bson.codecs.BsonValueCodecProvider}</li>
+     *     <li>{@link com.mongodb.DBRefCodecProvider}</li>
+     *     <li>{@link com.mongodb.DBObjectCodecProvider}</li>
+     *     <li>{@link org.bson.codecs.DocumentCodecProvider}</li>
+     *     <li>{@link org.bson.codecs.IterableCodecProvider}</li>
+     *     <li>{@link org.bson.codecs.MapCodecProvider}</li>
+     *     <li>{@link com.mongodb.client.model.geojson.codecs.GeoJsonCodecProvider}</li>
+     *     <li>{@link com.mongodb.client.gridfs.codecs.GridFSFileCodecProvider}</li>
      * </ul>
      *
      * @return the default codec registry
@@ -192,33 +201,38 @@ public class MongoClient extends Mongo implements Closeable {
     }
 
     /**
-     * <p>Creates a Mongo based on a list of replica set members or a list of mongos. It will find all members (the master will be used by
-     * default). If you pass in a single server in the list, the driver will still function as if it is a replica set. If you have a
-     * standalone server, use the Mongo(ServerAddress) constructor.</p>
+     * <p>Creates an instance based on a list of replica set members or mongos servers. For a replica set it will discover all members.
+     * For a list with a single seed, the driver will still discover all members of the replica set.  For a direct
+     * connection to a replica set member, with no discovery, use the {@link #MongoClient(ServerAddress)} constructor instead.</p>
      *
-     * <p>If this is a list of mongos servers, it will pick the closest (lowest ping time) one to send all requests to, and automatically
-     * fail over to the next server if the closest is down.</p>
+     * <p>When there is more than one server to choose from based on the type of request (read or write) and the read preference (if it's a
+     * read request), the driver will randomly select a server to send a request. This applies to both replica sets and sharded clusters.
+     * The servers to randomly select from are further limited by the local threshold.  See
+     * {@link MongoClientOptions#getLocalThreshold()}</p>
      *
      * @param seeds Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of mongod
      *              servers in the same replica set or a list of mongos servers in the same sharded cluster.
-     * @see com.mongodb.ServerAddress
+     * @see MongoClientOptions#getLocalThreshold()
      */
     public MongoClient(final List<ServerAddress> seeds) {
         this(seeds, new MongoClientOptions.Builder().build());
     }
 
     /**
-     * <p>Creates a Mongo based on a list of replica set members or a list of mongos. It will find all members (the master will be used by
-     * default). If you pass in a single server in the list, the driver will still function as if it is a replica set. If you have a
-     * standalone server, use the Mongo(ServerAddress) constructor.</p>
+     * <p>Creates an instance based on a list of replica set members or mongos servers. For a replica set it will discover all members.
+     * For a list with a single seed, the driver will still discover all members of the replica set.  For a direct
+     * connection to a replica set member, with no discovery, use the {@link #MongoClient(ServerAddress, List)}
+     * constructor instead.</p>
      *
-     * <p>If this is a list of mongos servers, it will pick the closest (lowest ping time) one to send all requests to, and automatically
-     * fail over to the next server if the closest is down.</p>
+     * <p>When there is more than one server to choose from based on the type of request (read or write) and the read preference (if it's a
+     * read request), the driver will randomly select a server to send a request. This applies to both replica sets and sharded clusters.
+     * The servers to randomly select from are further limited by the local threshold.  See
+     * {@link MongoClientOptions#getLocalThreshold()}</p>
      *
-     * @param seeds           Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list
-     *                        of mongod servers in the same replica set or a list of mongos servers in the same sharded cluster.
+     * @param seeds Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of mongod
+     *              servers in the same replica set or a list of mongos servers in the same sharded cluster.
      * @param credentialsList the list of credentials used to authenticate all connections
-     * @see com.mongodb.ServerAddress
+     * @see MongoClientOptions#getLocalThreshold()
      * @since 2.11.0
      */
     public MongoClient(final List<ServerAddress> seeds, final List<MongoCredential> credentialsList) {
@@ -226,35 +240,41 @@ public class MongoClient extends Mongo implements Closeable {
     }
 
     /**
-     * <p>Creates a Mongo based on a list of replica set members or a list of mongos. It will find all members (the master will be used by
-     * default). If you pass in a single server in the list, the driver will still function as if it is a replica set. If you have a
-     * standalone server, use the Mongo(ServerAddress) constructor.</p>
+     * <p>Construct an instance based on a list of replica set members or mongos servers. For a replica set it will discover all members.
+     * For a list with a single seed, the driver will still discover all members of the replica set.  For a direct
+     * connection to a replica set member, with no discovery, use the {@link #MongoClient(ServerAddress, MongoClientOptions)} constructor
+     * instead.</p>
      *
-     * <p>If this is a list of mongos servers, it will pick the closest (lowest ping time) one to send all requests to, and automatically
-     * fail over to the next server if the closest is down.</p>
+     * <p>When there is more than one server to choose from based on the type of request (read or write) and the read preference (if it's a
+     * read request), the driver will randomly select a server to send a request. This applies to both replica sets and sharded clusters.
+     * The servers to randomly select from are further limited by the local threshold.  See
+     * {@link MongoClientOptions#getLocalThreshold()}</p>
      *
-     * @param seeds   Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of
-     *                mongod servers in the same replica set or a list of mongos servers in the same sharded cluster.
-     * @param options default options
-     * @see com.mongodb.ServerAddress
+     * @param seeds Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of mongod
+     *              servers in the same replica set or a list of mongos servers in the same sharded cluster.
+     * @param options the options
+     * @see MongoClientOptions#getLocalThreshold()
      */
     public MongoClient(final List<ServerAddress> seeds, final MongoClientOptions options) {
         super(seeds, options);
     }
 
     /**
-     * <p>Creates a Mongo based on a list of replica set members or a list of mongos. It will find all members (the master will be used by
-     * default). If you pass in a single server in the list, the driver will still function as if it is a replica set. If you have a
-     * standalone server, use the Mongo(ServerAddress) constructor.</p>
+     * <p>Creates an instance based on a list of replica set members or mongos servers. For a replica set it will discover all members.
+     * For a list with a single seed, the driver will still discover all members of the replica set.  For a direct
+     * connection to a replica set member, with no discovery, use the {@link #MongoClient(ServerAddress, List, MongoClientOptions)}
+     * constructor instead.</p>
      *
-     * <p>If this is a list of mongos servers, it will pick the closest (lowest ping time) one to send all requests to, and automatically
-     * fail over to the next server if the closest is down.</p>
+     * <p>When there is more than one server to choose from based on the type of request (read or write) and the read preference (if it's a
+     * read request), the driver will randomly select a server to send a request. This applies to both replica sets and sharded clusters.
+     * The servers to randomly select from are further limited by the local threshold.  See
+     * {@link MongoClientOptions#getLocalThreshold()}</p>
      *
-     * @param seeds           Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list
-     *                        of mongod servers in the same replica set or a list of mongos servers in the same sharded cluster.
+     * @param seeds Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of mongod
+     *              servers in the same replica set or a list of mongos servers in the same sharded cluster.
      * @param credentialsList the list of credentials used to authenticate all connections
-     * @param options         default options
-     * @see com.mongodb.ServerAddress
+     * @param options         the options
+     * @see MongoClientOptions#getLocalThreshold()
      * @since 2.11.0
      */
     public MongoClient(final List<ServerAddress> seeds, final List<MongoCredential> credentialsList, final MongoClientOptions options) {
@@ -270,6 +290,54 @@ public class MongoClient extends Mongo implements Closeable {
      */
     public MongoClient(final MongoClientURI uri) {
         super(uri);
+    }
+
+    /**
+     * Creates a Mongo described by a URI.
+     *
+     * <p>Note: Intended for driver and library authors to associate extra driver metadata with the connections.</p>
+     *
+     * @param uri the URI
+     * @param mongoDriverInformation any driver information to associate with the MongoClient
+     * @throws MongoException if theres a failure
+     * @since 3.4
+     */
+    public MongoClient(final MongoClientURI uri, final MongoDriverInformation mongoDriverInformation) {
+        super(uri, mongoDriverInformation);
+    }
+
+    /**
+     * Creates a MongoClient to a single node using a given ServerAddress.
+     *
+     * <p>Note: Intended for driver and library authors to associate extra driver metadata with the connections.</p>
+     *
+     * @param addr            the database address
+     * @param credentialsList the list of credentials used to authenticate all connections
+     * @param options         default options
+     * @param mongoDriverInformation any driver information to associate with the MongoClient
+     * @see com.mongodb.ServerAddress
+     * @since 3.4
+     */
+    public MongoClient(final ServerAddress addr, final List<MongoCredential> credentialsList, final MongoClientOptions options,
+                       final MongoDriverInformation mongoDriverInformation) {
+        super(addr, credentialsList, options, mongoDriverInformation);
+    }
+
+    /**
+     * Creates a MongoClient
+     *
+     * <p>Note: Intended for driver and library authors to associate extra driver metadata with the connections.</p>
+     *
+     * @param seeds Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of mongod
+     *              servers in the same replica set or a list of mongos servers in the same sharded cluster.
+     * @param credentialsList the list of credentials used to authenticate all connections
+     * @param options         the options
+     * @param mongoDriverInformation any driver information to associate with the MongoClient
+     * @since 3.4
+     */
+    public MongoClient(final List<ServerAddress> seeds, final List<MongoCredential> credentialsList, final MongoClientOptions options,
+                       final MongoDriverInformation mongoDriverInformation) {
+        super(seeds, credentialsList, options, mongoDriverInformation);
     }
 
     /**
@@ -296,13 +364,30 @@ public class MongoClient extends Mongo implements Closeable {
     /**
      * Get a list of the database names
      *
-     * @mongodb.driver.manual reference/commands/listDatabases List Databases
+     * @mongodb.driver.manual reference/command/listDatabases List Databases
      * @return an iterable containing all the names of all the databases
      * @since 3.0
      */
     public MongoIterable<String> listDatabaseNames() {
-        return new ListDatabasesIterableImpl<BsonDocument>(BsonDocument.class, getDefaultCodecRegistry(),
-                ReadPreference.primary(), createOperationExecutor()).map(new Function<BsonDocument, String>() {
+        return executeListDatabaseNames(null);
+    }
+
+    /**
+     * Get a list of the database names
+     *
+     * @param clientSession the client session with which to associate this operation
+     * @return an iterable containing all the names of all the databases
+     * @since 3.6
+     * @mongodb.server.release 3.6
+     * @mongodb.driver.manual reference/command/listDatabases List Databases
+     */
+    public MongoIterable<String> listDatabaseNames(final ClientSession clientSession) {
+        notNull("clientSession", clientSession);
+        return executeListDatabaseNames(clientSession);
+    }
+
+    private MongoIterable<String> executeListDatabaseNames(final ClientSession clientSession) {
+        return executeListDatabases(clientSession, BsonDocument.class).map(new Function<BsonDocument, String>() {
             @Override
             public String apply(final BsonDocument result) {
                 return result.getString("name").getValue();
@@ -329,18 +414,68 @@ public class MongoClient extends Mongo implements Closeable {
      * @since 3.0
      */
     public <T> ListDatabasesIterable<T> listDatabases(final Class<T> clazz) {
-        return new ListDatabasesIterableImpl<T>(clazz, getMongoClientOptions().getCodecRegistry(),
-                ReadPreference.primary(), createOperationExecutor());
+        return executeListDatabases(null, clazz);
+    }
+
+    /**
+     * Gets the list of databases
+     *
+     * @param clientSession the client session with which to associate this operation
+     * @return the list of databases
+     * @since 3.6
+     * @mongodb.server.release 3.6
+     */
+    public ListDatabasesIterable<Document> listDatabases(final ClientSession clientSession) {
+        return listDatabases(clientSession, Document.class);
+    }
+
+    /**
+     * Gets the list of databases
+     *
+     * @param clientSession the client session with which to associate this operation
+     * @param clazz the class to cast the database documents to
+     * @param <T>   the type of the class to use instead of {@code Document}.
+     * @return the list of databases
+     * @since 3.6
+     * @mongodb.server.release 3.6
+     */
+    public <T> ListDatabasesIterable<T> listDatabases(final ClientSession clientSession, final Class<T> clazz) {
+        notNull("clientSession", clientSession);
+        return executeListDatabases(clientSession, clazz);
+    }
+
+    private <T> ListDatabasesIterable<T> executeListDatabases(final ClientSession clientSession, final Class<T> clazz) {
+        return new ListDatabasesIterableImpl<T>(clientSession, clazz, getMongoClientOptions().getCodecRegistry(),
+                                                       ReadPreference.primary(), createOperationExecutor());
     }
 
     /**
      * @param databaseName the name of the database to retrieve
      * @return a {@code MongoDatabase} representing the specified database
+     * @throws IllegalArgumentException if databaseName is invalid
+     * @see MongoNamespace#checkDatabaseNameValidity(String)
      */
     public MongoDatabase getDatabase(final String databaseName) {
         MongoClientOptions clientOptions = getMongoClientOptions();
         return new MongoDatabaseImpl(databaseName, clientOptions.getCodecRegistry(), clientOptions.getReadPreference(),
                 clientOptions.getWriteConcern(), clientOptions.getReadConcern(), createOperationExecutor());
+    }
+
+    /**
+     * Creates a client session.
+     *
+     * @param options the options for the client session
+     * @return the client session
+     * @throws MongoClientException if the MongoDB cluster to which this client is connected does not support sessions
+     * @mongodb.server.release 3.6
+     * @since 3.6
+     */
+    public ClientSession startSession(final ClientSessionOptions options) {
+        ClientSession clientSession = createClientSession(options);
+        if (clientSession == null) {
+            throw new MongoClientException("Sessions are not supported by the MongoDB cluster to which this client is connected");
+        }
+        return clientSession;
     }
 
     static DBObjectCodec getCommandCodec() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,15 +26,16 @@ import org.bson.BSON;
 import org.bson.BSONObject;
 import org.bson.BasicBSONCallback;
 import org.bson.BsonUndefined;
+import org.bson.internal.Base64;
 import org.bson.types.BSONTimestamp;
 import org.bson.types.Binary;
 import org.bson.types.Code;
 import org.bson.types.CodeWScope;
+import org.bson.types.Decimal128;
 import org.bson.types.MaxKey;
 import org.bson.types.MinKey;
 import org.bson.types.ObjectId;
 
-import javax.xml.bind.DatatypeConverter;
 import java.text.ParsePosition;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -45,7 +46,10 @@ import java.util.regex.Pattern;
 
 /**
  * Converts JSON to DBObjects and vice versa.
+ *
+ * @deprecated This class has been superseded by to toJson and parse methods on BasicDBObject
  */
+@Deprecated
 public class JSONCallback extends BasicBSONCallback {
 
     @Override
@@ -124,13 +128,15 @@ public class JSONCallback extends BasicBSONCallback {
         } else if (b.containsField("$uuid")) {
             o = UUID.fromString((String) b.get("$uuid"));
         } else if (b.containsField("$binary")) {
-            int type = (Integer) b.get("$type");
-            byte[] bytes = DatatypeConverter.parseBase64Binary((String) b.get("$binary"));
+            int type = (b.get("$type") instanceof String) ? Integer.valueOf((String) b.get("$type"), 16) : (Integer) b.get("$type");
+            byte[] bytes = Base64.decode((String) b.get("$binary"));
             o = new Binary((byte) type, bytes);
         } else if (b.containsField("$undefined") && b.get("$undefined").equals(true)) {
             o = new BsonUndefined();
         } else if (b.containsField("$numberLong")) {
             o = Long.valueOf((String) b.get("$numberLong"));
+        } else if (b.containsField("$numberDecimal")) {
+            o = Decimal128.parse((String) b.get("$numberDecimal"));
         }
 
         if (!isStackEmpty()) {

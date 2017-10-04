@@ -116,11 +116,27 @@ public class DBCollectionTest extends DatabaseTestCase {
     }
 
     @Test
+    public void insertEmptyListShouldThrowIllegalArgumentException() {
+        try {
+            collection.insert(Collections.<DBObject>emptyList());
+            fail("Should throw IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+           // empty
+        }
+    }
+
+    @Test
     public void testInsert() {
         WriteResult res = collection.insert(new BasicDBObject("_id", 1).append("x", 2));
         assertNotNull(res);
         assertEquals(1L, collection.count());
         assertEquals(new BasicDBObject("_id", 1).append("x", 2), collection.findOne());
+    }
+
+    @Test
+    public void testFindWithNullQuery() {
+        collection.insert(new BasicDBObject("_id", 1).append("x", 2));
+        assertEquals(new BasicDBObject("_id", 1).append("x", 2), collection.find(null).next());
     }
 
     @Test
@@ -228,7 +244,6 @@ public class DBCollectionTest extends DatabaseTestCase {
 
     @Test(expected = MongoCommandException.class)
     public void testCreateIndexWithInvalidIndexType() {
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
         DBObject index = new BasicDBObject("x", "funny");
         collection.createIndex(index);
     }
@@ -288,7 +303,7 @@ public class DBCollectionTest extends DatabaseTestCase {
 
     @Test
     public void testCreateIndexAs2dsphere() {
-        assumeThat(serverVersionAtLeast(asList(2, 4, 0)), is(true));
+        assumeThat(serverVersionAtLeast(2, 4), is(true));
 
         // when
         DBObject index = new BasicDBObject("x", "2dsphere");
@@ -301,7 +316,6 @@ public class DBCollectionTest extends DatabaseTestCase {
 
     @Test
     public void testCreateIndexAsText() {
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
         DBObject index = new BasicDBObject("x", "text");
         collection.createIndex(index);
 
@@ -429,7 +443,6 @@ public class DBCollectionTest extends DatabaseTestCase {
     @Test(expected = MongoExecutionTimeoutException.class)
     public void testFindAndUpdateTimeout() {
         assumeThat(ClusterFixture.isAuthenticated(), is(false));
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
         collection.insert(new BasicDBObject("_id", 1));
         enableMaxTimeFailPoint();
         try {
@@ -443,7 +456,6 @@ public class DBCollectionTest extends DatabaseTestCase {
     @Test(expected = MongoExecutionTimeoutException.class)
     public void testFindAndReplaceTimeout() {
         assumeThat(isSharded(), is(false));
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
         collection.insert(new BasicDBObject("_id", 1));
         enableMaxTimeFailPoint();
         try {
@@ -457,7 +469,6 @@ public class DBCollectionTest extends DatabaseTestCase {
     @Test(expected = MongoExecutionTimeoutException.class)
     public void testFindAndRemoveTimeout() {
         assumeThat(isSharded(), is(false));
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
         collection.insert(new BasicDBObject("_id", 1));
         enableMaxTimeFailPoint();
         try {
@@ -860,7 +871,7 @@ public class DBCollectionTest extends DatabaseTestCase {
 
     @Test
     public void testWriteConcernExceptionOnFindAndModify() throws UnknownHostException {
-        assumeThat(serverVersionAtLeast(asList(3, 2, 0)), is(true));
+        assumeThat(serverVersionAtLeast(3, 2), is(true));
         assumeThat(isDiscoverableReplicaSet(), is(true));
 
         ObjectId id = new ObjectId();
@@ -959,7 +970,6 @@ public class DBCollectionTest extends DatabaseTestCase {
     @Category(Slow.class)
     public void testParallelScan() throws UnknownHostException {
         assumeThat(isSharded(), is(false));
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
 
         Set<Integer> ids = new HashSet<Integer>();
         List<BasicDBObject> documents = new ArrayList<BasicDBObject>(2000);
@@ -993,7 +1003,7 @@ public class DBCollectionTest extends DatabaseTestCase {
 
         try {
             c.insert(Collections.<DBObject>singletonList(new BasicDBObject("level", 9)));
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1003,7 +1013,7 @@ public class DBCollectionTest extends DatabaseTestCase {
         try {
             c.insert(Collections.<DBObject>singletonList(new BasicDBObject("level", 9)),
                      new InsertOptions().bypassDocumentValidation(false));
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1023,7 +1033,7 @@ public class DBCollectionTest extends DatabaseTestCase {
                      new InsertOptions()
                      .bypassDocumentValidation(true)
                      .writeConcern(WriteConcern.UNACKNOWLEDGED));
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1041,7 +1051,7 @@ public class DBCollectionTest extends DatabaseTestCase {
         try {
             c.update(new BasicDBObject("_id", 1), new BasicDBObject("_id", 1).append("level", 9), true, false, WriteConcern.ACKNOWLEDGED,
                      null);
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1051,7 +1061,7 @@ public class DBCollectionTest extends DatabaseTestCase {
         try {
             c.update(new BasicDBObject("_id", 1), new BasicDBObject("_id", 1).append("level", 9), true, false, WriteConcern.ACKNOWLEDGED,
                      false, null);
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1077,7 +1087,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             c.update(new BasicDBObject("_id", 1), new BasicDBObject("_id", 1).append("level", 9), true, false,
                      WriteConcern.UNACKNOWLEDGED,
                      true, null);
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1095,7 +1105,7 @@ public class DBCollectionTest extends DatabaseTestCase {
 
         try {
             c.findAndModify(new BasicDBObject("_id", 1), new BasicDBObject("_id", 1).append("level", 9));
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1105,7 +1115,7 @@ public class DBCollectionTest extends DatabaseTestCase {
         try {
             c.findAndModify(new BasicDBObject("_id", 1), null, null, false, new BasicDBObject("_id", 1).append("level", 9), false, false,
                             false, 0, TimeUnit.SECONDS);
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1137,7 +1147,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             BulkWriteOperation bulk = c.initializeOrderedBulkOperation();
             bulk.insert(new BasicDBObject("level", 9));
             bulk.execute();
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1149,7 +1159,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             bulk.setBypassDocumentValidation(false);
             bulk.insert(new BasicDBObject("level", 9));
             bulk.execute();
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1189,7 +1199,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             bulk.setBypassDocumentValidation(true);
             bulk.insert(new BasicDBObject("level", 9));
             bulk.execute(WriteConcern.UNACKNOWLEDGED);
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1207,7 +1217,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             BulkWriteOperation bulk = c.initializeOrderedBulkOperation();
             bulk.find(new BasicDBObject("_id", 1)).upsert().update(new BasicDBObject("$set", new BasicDBObject("level", 9)));
             bulk.execute();
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1219,7 +1229,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             bulk.setBypassDocumentValidation(false);
             bulk.find(new BasicDBObject("_id", 1)).upsert().update(new BasicDBObject("$set", new BasicDBObject("level", 9)));
             bulk.execute();
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1259,7 +1269,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             bulk.setBypassDocumentValidation(true);
             bulk.find(new BasicDBObject("_id", 1)).upsert().update(new BasicDBObject("$set", new BasicDBObject("level", 9)));
             bulk.execute(WriteConcern.UNACKNOWLEDGED);
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1277,7 +1287,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             BulkWriteOperation bulk = c.initializeOrderedBulkOperation();
             bulk.find(new BasicDBObject("_id", 1)).upsert().replaceOne(new BasicDBObject("level", 9));
             bulk.execute();
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1289,7 +1299,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             bulk.setBypassDocumentValidation(false);
             bulk.find(new BasicDBObject("_id", 1)).upsert().replaceOne(new BasicDBObject("level", 9));
             bulk.execute();
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1329,7 +1339,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             bulk.setBypassDocumentValidation(true);
             bulk.find(new BasicDBObject("_id", 1)).upsert().replaceOne(new BasicDBObject("level", 9));
             bulk.execute(WriteConcern.UNACKNOWLEDGED);
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1338,9 +1348,8 @@ public class DBCollectionTest extends DatabaseTestCase {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void testBypassDocumentValidationForAggregateDollarOut() {
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
-
         //given
         DBObject options = new BasicDBObject("validator", QueryBuilder.start("level").greaterThanEquals(10).get());
         DBCollection cOut = database.createCollection(collectionName + ".out", options);
@@ -1350,7 +1359,7 @@ public class DBCollectionTest extends DatabaseTestCase {
 
         try {
             c.aggregate(Collections.<DBObject>singletonList(new BasicDBObject("$out", cOut.getName())));
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1362,7 +1371,7 @@ public class DBCollectionTest extends DatabaseTestCase {
                         AggregationOptions.builder()
                         .bypassDocumentValidation(false)
                         .build());
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1403,7 +1412,7 @@ public class DBCollectionTest extends DatabaseTestCase {
             MapReduceCommand mapReduceCommand = new MapReduceCommand(c, map, reduce, cOut.getName(), MapReduceCommand.OutputType.REPLACE,
                                                                      new BasicDBObject());
             c.mapReduce(mapReduceCommand);
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {
@@ -1415,7 +1424,7 @@ public class DBCollectionTest extends DatabaseTestCase {
                                                                      new BasicDBObject());
             mapReduceCommand.setBypassDocumentValidation(false);
             c.mapReduce(mapReduceCommand);
-            if (serverVersionAtLeast(asList(3, 2, 0))) {
+            if (serverVersionAtLeast(3, 2)) {
                 fail();
             }
         } catch (MongoException e) {

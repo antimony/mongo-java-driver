@@ -19,6 +19,8 @@ package com.mongodb.binding;
 import com.mongodb.ReadPreference;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.ServerDescription;
+import com.mongodb.connection.SessionContext;
+import com.mongodb.internal.connection.NoOpSessionContext;
 
 import static com.mongodb.assertions.Assertions.notNull;
 
@@ -58,6 +60,11 @@ public class SingleConnectionReadBinding extends AbstractReferenceCounted implem
     }
 
     @Override
+    public SessionContext getSessionContext() {
+        return NoOpSessionContext.INSTANCE;
+    }
+
+    @Override
     public ReadBinding retain() {
         super.retain();
         return this;
@@ -73,13 +80,18 @@ public class SingleConnectionReadBinding extends AbstractReferenceCounted implem
 
     private class SingleConnectionSource extends AbstractReferenceCounted implements ConnectionSource {
 
-        public SingleConnectionSource() {
+        SingleConnectionSource() {
             SingleConnectionReadBinding.this.retain();
         }
 
         @Override
         public ServerDescription getServerDescription() {
             return serverDescription;
+        }
+
+        @Override
+        public SessionContext getSessionContext() {
+            return NoOpSessionContext.INSTANCE;
         }
 
         @Override

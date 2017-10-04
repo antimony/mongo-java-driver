@@ -24,7 +24,6 @@ import com.mongodb.event.ClusterListener;
 import com.mongodb.selector.ServerSelector;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -33,6 +32,7 @@ import java.util.concurrent.TimeUnit;
 import static com.mongodb.assertions.Assertions.isTrueArgument;
 import static com.mongodb.assertions.Assertions.notNull;
 import static java.util.Collections.singletonList;
+import static java.util.Collections.unmodifiableList;
 
 /**
  * Settings for the cluster.
@@ -61,6 +61,17 @@ public final class ClusterSettings {
     }
 
     /**
+     * Creates a builder instance.
+     *
+     * @param clusterSettings existing ClusterSettings to default the builder settings on.
+     * @return a builder
+     * @since 3.5
+     */
+    public static Builder builder(final ClusterSettings clusterSettings) {
+        return new Builder(clusterSettings);
+    }
+
+    /**
      * A builder for the cluster settings.
      */
     @NotThreadSafe
@@ -76,6 +87,19 @@ public final class ClusterSettings {
         private final List<ClusterListener> clusterListeners = new ArrayList<ClusterListener>();
 
         private Builder() {
+        }
+
+        private Builder(final ClusterSettings clusterSettings) {
+            notNull("builder", clusterSettings);
+            description = clusterSettings.description;
+            hosts = clusterSettings.hosts;
+            mode = clusterSettings.mode;
+            requiredReplicaSetName = clusterSettings.requiredReplicaSetName;
+            requiredClusterType = clusterSettings.requiredClusterType;
+            serverSelector = clusterSettings.serverSelector;
+            serverSelectionTimeoutMS = clusterSettings.serverSelectionTimeoutMS;
+            maxWaitQueueSize = clusterSettings.maxWaitQueueSize;
+            clusterListeners.addAll(clusterSettings.clusterListeners);
         }
 
         /**
@@ -102,9 +126,10 @@ public final class ClusterSettings {
             }
             Set<ServerAddress> hostsSet = new LinkedHashSet<ServerAddress>(hosts.size());
             for (ServerAddress host : hosts) {
+                notNull("host", host);
                 hostsSet.add(new ServerAddress(host.getHost(), host.getPort()));
             }
-            this.hosts = Collections.unmodifiableList(new ArrayList<ServerAddress>(hostsSet));
+            this.hosts = unmodifiableList(new ArrayList<ServerAddress>(hostsSet));
             return this;
         }
 
@@ -218,6 +243,11 @@ public final class ClusterSettings {
             int waitQueueMultiple = connectionString.getThreadsAllowedToBlockForConnectionMultiplier() != null
                                     ? connectionString.getThreadsAllowedToBlockForConnectionMultiplier() : 5;
             maxWaitQueueSize(waitQueueMultiple * maxSize);
+
+            if (connectionString.getServerSelectionTimeout() != null) {
+                serverSelectionTimeout(connectionString.getServerSelectionTimeout(), TimeUnit.MILLISECONDS);
+            }
+
             return this;
         }
 
@@ -320,7 +350,7 @@ public final class ClusterSettings {
      * @since 3.3
      */
     public List<ClusterListener> getClusterListeners() {
-        return Collections.unmodifiableList(clusterListeners);
+        return clusterListeners;
     }
 
     @Override
@@ -441,6 +471,6 @@ public final class ClusterSettings {
         serverSelector = builder.serverSelector;
         serverSelectionTimeoutMS = builder.serverSelectionTimeoutMS;
         maxWaitQueueSize = builder.maxWaitQueueSize;
-        clusterListeners = builder.clusterListeners;
+        clusterListeners = unmodifiableList(builder.clusterListeners);
     }
 }

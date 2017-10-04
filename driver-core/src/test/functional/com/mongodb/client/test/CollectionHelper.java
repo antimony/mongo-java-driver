@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2015 MongoDB, Inc.
+ * Copyright (c) 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package com.mongodb.client.test;
 
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ServerCursor;
 import com.mongodb.WriteConcern;
 import com.mongodb.binding.AsyncReadWriteBinding;
 import com.mongodb.binding.ReadBinding;
@@ -32,6 +33,7 @@ import com.mongodb.client.model.ValidationOptions;
 import com.mongodb.client.model.geojson.codecs.GeoJsonCodecProvider;
 import com.mongodb.operation.AggregateOperation;
 import com.mongodb.operation.BatchCursor;
+import com.mongodb.operation.CommandWriteOperation;
 import com.mongodb.operation.CountOperation;
 import com.mongodb.operation.CreateCollectionOperation;
 import com.mongodb.operation.CreateIndexesOperation;
@@ -41,16 +43,19 @@ import com.mongodb.operation.FindOperation;
 import com.mongodb.operation.InsertOperation;
 import com.mongodb.operation.ListIndexesOperation;
 import com.mongodb.operation.MixedBulkWriteOperation;
+import org.bson.BsonArray;
 import org.bson.BsonDocument;
 import org.bson.BsonDocumentWrapper;
+import org.bson.BsonInt64;
+import org.bson.BsonString;
 import org.bson.Document;
 import org.bson.codecs.BsonDocumentCodec;
-import org.bson.codecs.BsonTypeClassMap;
 import org.bson.codecs.BsonValueCodecProvider;
 import org.bson.codecs.Codec;
 import org.bson.codecs.Decoder;
 import org.bson.codecs.DocumentCodec;
 import org.bson.codecs.DocumentCodecProvider;
+import org.bson.codecs.IterableCodecProvider;
 import org.bson.codecs.ValueCodecProvider;
 import org.bson.codecs.configuration.CodecRegistries;
 import org.bson.codecs.configuration.CodecRegistry;
@@ -68,6 +73,7 @@ public final class CollectionHelper<T> {
 
     private Codec<T> codec;
     private CodecRegistry registry = CodecRegistries.fromProviders(new BsonValueCodecProvider(),
+                                                                   new IterableCodecProvider(),
                                                                    new ValueCodecProvider(),
                                                                    new DocumentCodecProvider(),
                                                                    new GeoJsonCodecProvider());
@@ -79,7 +85,7 @@ public final class CollectionHelper<T> {
     }
 
     public static void drop(final MongoNamespace namespace) {
-        new DropCollectionOperation(namespace).execute(getBinding());
+        new DropCollectionOperation(namespace, WriteConcern.ACKNOWLEDGED).execute(getBinding());
     }
 
     public static void dropDatabase(final String name) {
@@ -87,7 +93,7 @@ public final class CollectionHelper<T> {
             return;
         }
         try {
-            new DropDatabaseOperation(name).execute(getBinding());
+            new DropDatabaseOperation(name, WriteConcern.ACKNOWLEDGED).execute(getBinding());
         } catch (MongoCommandException e) {
             if (!e.getErrorMessage().contains("ns not found")) {
                 throw e;
@@ -95,18 +101,22 @@ public final class CollectionHelper<T> {
         }
     }
 
+    public MongoNamespace getNamespace() {
+        return namespace;
+    }
+
     public void drop() {
-        new DropCollectionOperation(namespace).execute(getBinding());
+        new DropCollectionOperation(namespace, WriteConcern.ACKNOWLEDGED).execute(getBinding());
     }
 
     public void create(final String collectionName, final CreateCollectionOptions options) {
         drop(namespace);
-        CreateCollectionOperation operation = new CreateCollectionOperation(namespace.getDatabaseName(), collectionName)
+        CreateCollectionOperation operation = new CreateCollectionOperation(namespace.getDatabaseName(), collectionName,
+                                                                                   WriteConcern.ACKNOWLEDGED)
                 .capped(options.isCapped())
                 .sizeInBytes(options.getSizeInBytes())
                 .autoIndex(options.isAutoIndex())
-                .maxDocuments(options.getMaxDocuments())
-                .usePowerOf2Sizes(options.isUsePowerOf2Sizes());
+                .maxDocuments(options.getMaxDocuments());
 
         IndexOptionDefaults indexOptionDefaults = options.getIndexOptionDefaults();
         if (indexOptionDefaults.getStorageEngine() != null) {
@@ -125,35 +135,45 @@ public final class CollectionHelper<T> {
         operation.execute(getBinding());
     }
 
-    @SuppressWarnings("unchecked")
-    public void insertDocuments(final BsonDocument... documents) {
-        for (BsonDocument document : documents) {
-            new InsertOperation(namespace, true, WriteConcern.ACKNOWLEDGED,
-                                asList(new InsertRequest(document))).execute(getBinding());
+    public void killCursor(final MongoNamespace namespace, final ServerCursor serverCursor) {
+        if (serverCursor != null) {
+            BsonDocument command = new BsonDocument("killCursors", new BsonString(namespace.getCollectionName()))
+                    .append("cursors", new BsonArray(singletonList(new BsonInt64(serverCursor.getId()))));
+            try {
+                new CommandWriteOperation<BsonDocument>(namespace.getDatabaseName(), command, new BsonDocumentCodec())
+                        .execute(getBinding());
+            } catch (Exception e) {
+                // Ignore any exceptions killing old cursors
+            }
         }
     }
 
-    @SuppressWarnings("unchecked")
+    public void insertDocuments(final BsonDocument... documents) {
+        insertDocuments(asList(documents));
+    }
+
     public void insertDocuments(final List<BsonDocument> documents) {
         insertDocuments(documents, getBinding());
     }
 
+    public void insertDocuments(final List<BsonDocument> documents, final WriteConcern writeConcern) {
+        insertDocuments(documents, writeConcern, getBinding());
+    }
 
-    @SuppressWarnings("unchecked")
     public void insertDocuments(final List<BsonDocument> documents, final WriteBinding binding) {
         insertDocuments(documents, WriteConcern.ACKNOWLEDGED, binding);
     }
 
-    @SuppressWarnings("unchecked")
     public void insertDocuments(final List<BsonDocument> documents, final WriteConcern writeConcern, final WriteBinding binding) {
+        List<InsertRequest> insertRequests = new ArrayList<InsertRequest>(documents.size());
         for (BsonDocument document : documents) {
-            new InsertOperation(namespace, true, writeConcern,
-                                singletonList(new InsertRequest(document))).execute(binding);
+            insertRequests.add(new InsertRequest(document));
         }
+        new InsertOperation(namespace, true, writeConcern, insertRequests).execute(binding);
     }
 
     public void insertDocuments(final Document... documents) {
-        insertDocuments(new DocumentCodec(registry, new BsonTypeClassMap()), asList(documents));
+        insertDocuments(new DocumentCodec(registry), asList(documents));
     }
 
     public <I> void insertDocuments(final Codec<I> iCodec, final I... documents) {
@@ -281,24 +301,26 @@ public final class CollectionHelper<T> {
     }
 
     public void createIndex(final BsonDocument key) {
-        new CreateIndexesOperation(namespace, asList(new IndexRequest(key))).execute(getBinding());
+        new CreateIndexesOperation(namespace, asList(new IndexRequest(key)), WriteConcern.ACKNOWLEDGED).execute(getBinding());
     }
 
     public void createIndex(final Document key) {
-        new CreateIndexesOperation(namespace, asList(new IndexRequest(wrap(key)))).execute(getBinding());
+        new CreateIndexesOperation(namespace, asList(new IndexRequest(wrap(key))), WriteConcern.ACKNOWLEDGED).execute(getBinding());
     }
 
     public void createIndex(final Document key, final String defaultLanguage) {
-        new CreateIndexesOperation(namespace, asList(new IndexRequest(wrap(key)).defaultLanguage(defaultLanguage))).execute(getBinding());
+        new CreateIndexesOperation(namespace, asList(new IndexRequest(wrap(key)).defaultLanguage(defaultLanguage)),
+                                          WriteConcern.ACKNOWLEDGED).execute(getBinding());
     }
 
     public void createIndex(final Bson key) {
-        new CreateIndexesOperation(namespace, asList(new IndexRequest(key.toBsonDocument(Document.class, registry)))).execute(getBinding());
+        new CreateIndexesOperation(namespace, asList(new IndexRequest(key.toBsonDocument(Document.class, registry))),
+                                          WriteConcern.ACKNOWLEDGED).execute(getBinding());
     }
 
     public void createIndex(final Bson key, final Double bucketSize) {
         new CreateIndexesOperation(namespace, asList(new IndexRequest(key.toBsonDocument(Document.class, registry))
-                .bucketSize(bucketSize))).execute(getBinding());
+                .bucketSize(bucketSize)), WriteConcern.ACKNOWLEDGED).execute(getBinding());
     }
 
     public List<BsonDocument> listIndexes(){

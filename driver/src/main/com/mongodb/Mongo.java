@@ -23,6 +23,7 @@ import com.mongodb.binding.ReadBinding;
 import com.mongodb.binding.ReadWriteBinding;
 import com.mongodb.binding.SingleServerBinding;
 import com.mongodb.binding.WriteBinding;
+import com.mongodb.client.MongoDriverInformation;
 import com.mongodb.connection.BufferProvider;
 import com.mongodb.connection.Cluster;
 import com.mongodb.connection.ClusterConnectionMode;
@@ -33,25 +34,30 @@ import com.mongodb.connection.DefaultClusterFactory;
 import com.mongodb.connection.ServerDescription;
 import com.mongodb.connection.SocketStreamFactory;
 import com.mongodb.event.ClusterListener;
-import com.mongodb.event.CommandEventMulticaster;
-import com.mongodb.event.CommandListener;
+import com.mongodb.internal.connection.ConcurrentPool;
 import com.mongodb.internal.connection.PowerOfTwoBufferPool;
 import com.mongodb.internal.thread.DaemonThreadFactory;
-import com.mongodb.management.JMXConnectionPoolListener;
+import com.mongodb.operation.BatchCursor;
 import com.mongodb.operation.CurrentOpOperation;
 import com.mongodb.operation.FsyncUnlockOperation;
 import com.mongodb.operation.ListDatabasesOperation;
-import com.mongodb.operation.OperationExecutor;
 import com.mongodb.operation.ReadOperation;
 import com.mongodb.operation.WriteOperation;
 import com.mongodb.selector.LatencyMinimizingServerSelector;
-import com.mongodb.selector.ServerSelector;
+import org.bson.BsonBinary;
 import org.bson.BsonBoolean;
+import org.bson.BsonDocument;
+import org.bson.BsonDocumentWriter;
+import org.bson.BsonTimestamp;
+import org.bson.UuidRepresentation;
+import org.bson.codecs.EncoderContext;
+import org.bson.codecs.UuidCodec;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
@@ -60,8 +66,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
 import static com.mongodb.ReadPreference.primary;
+import static com.mongodb.assertions.Assertions.isTrue;
 import static com.mongodb.connection.ClusterConnectionMode.MULTIPLE;
 import static com.mongodb.connection.ClusterType.REPLICA_SET;
+import static com.mongodb.internal.event.EventListenerHelper.getCommandListener;
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 import static java.util.Collections.unmodifiableList;
@@ -209,16 +217,18 @@ public class Mongo {
     }
 
     /**
-     * <p>Creates a Mongo based on a list of replica set members or a list of mongos. It will find all members (the master will be used by
-     * default). If you pass in a single server in the list, the driver will still function as if it is a replica set. If you have a
-     * standalone server, use the Mongo(ServerAddress) constructor.</p>
+     * <p>Creates an instance based on a list of replica set members or mongos servers. For a replica set it will discover all members.
+     * For a list with a single seed, the driver will still discover all members of the replica set.  For a direct
+     * connection to a replica set member, with no discovery, use the {@link #Mongo(ServerAddress)} constructor instead.</p>
      *
-     * <p>If this is a list of mongos servers, it will pick the closest (lowest ping time) one to send all requests to, and automatically
-     * fail over to the next server if the closest is down.</p>
+     * <p>When there is more than one server to choose from based on the type of request (read or write) and the read preference (if it's a
+     * read request), the driver will randomly select a server to send a request. This applies to both replica sets and sharded clusters.
+     * The servers to randomly select from are further limited by the local threshold.  See
+     * {@link MongoClientOptions#getLocalThreshold()}</p>
      *
      * @param seeds Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of mongod
      *              servers in the same replica set or a list of mongos servers in the same sharded cluster.
-     * @see com.mongodb.ServerAddress
+     * @see MongoClientOptions#getLocalThreshold()
      * @deprecated Replaced by {@link MongoClient#MongoClient(java.util.List)}
      */
     @Deprecated
@@ -227,17 +237,20 @@ public class Mongo {
     }
 
     /**
-     * <p>Creates a Mongo based on a list of replica set members or a list of mongos. It will find all members (the master will be used by
-     * default). If you pass in a single server in the list, the driver will still function as if it is a replica set. If you have a
-     * standalone server, use the Mongo(ServerAddress) constructor.</p>
+     * <p>Creates an instance based on a list of replica set members or mongos servers. For a replica set it will discover all members.
+     * For a list with a single seed, the driver will still discover all members of the replica set.  For a direct
+     * connection to a replica set member, with no discovery, use the {@link #Mongo(ServerAddress, MongoClientOptions)} constructor
+     * instead.</p>
      *
-     * <p>If this is a list of mongos servers, it will pick the closest (lowest ping time) one to send all requests to, and automatically
-     * fail over to the next server if the closest is down.</p>
+     * <p>When there is more than one server to choose from based on the type of request (read or write) and the read preference (if it's a
+     * read request), the driver will randomly select a server to send a request. This applies to both replica sets and sharded clusters.
+     * The servers to randomly select from are further limited by the local threshold.  See
+     * {@link MongoClientOptions#getLocalThreshold()}</p>
      *
-     * @param seeds   Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of
-     *                mongod servers in the same replica set or a list of mongos servers in the same sharded cluster.
-     * @param options for configuring this Mongo instance
-     * @see com.mongodb.ServerAddress
+     * @param seeds Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of mongod
+     *              servers in the same replica set or a list of mongos servers in the same sharded cluster.
+     * @param options the options
+     * @see MongoClientOptions#getLocalThreshold()
      * @deprecated Replaced by {@link MongoClient#MongoClient(java.util.List, MongoClientOptions)}
      */
     @Deprecated
@@ -279,17 +292,30 @@ public class Mongo {
     }
 
     Mongo(final ServerAddress serverAddress, final List<MongoCredential> credentialsList, final MongoClientOptions options) {
-        this(createCluster(serverAddress, credentialsList, options), options, credentialsList);
+        this(serverAddress, credentialsList, options, null);
+    }
+
+    Mongo(final ServerAddress serverAddress, final List<MongoCredential> credentialsList, final MongoClientOptions options,
+          final MongoDriverInformation mongoDriverInformation) {
+        this(createCluster(serverAddress, credentialsList, options, mongoDriverInformation), options, credentialsList);
     }
 
     Mongo(final List<ServerAddress> seedList, final List<MongoCredential> credentialsList, final MongoClientOptions options) {
-        this(createCluster(seedList, credentialsList, options), options, credentialsList);
+        this(seedList, credentialsList, options, null);
+    }
+
+    Mongo(final List<ServerAddress> seedList, final List<MongoCredential> credentialsList, final MongoClientOptions options,
+          final MongoDriverInformation mongoDriverInformation) {
+        this(createCluster(seedList, credentialsList, options, mongoDriverInformation), options, credentialsList);
     }
 
     Mongo(final MongoClientURI mongoURI) {
-        this(createCluster(mongoURI),
-             mongoURI.getOptions(),
-             mongoURI.getCredentials() != null ? asList(mongoURI.getCredentials()) : Collections.<MongoCredential>emptyList());
+        this(mongoURI, null);
+    }
+
+    Mongo(final MongoClientURI mongoURI, final MongoDriverInformation mongoDriverInformation) {
+        this(createCluster(mongoURI, mongoDriverInformation), mongoURI.getOptions(),
+                mongoURI.getCredentials() != null ? asList(mongoURI.getCredentials()) : Collections.<MongoCredential>emptyList());
     }
 
     Mongo(final Cluster cluster, final MongoClientOptions options, final List<MongoCredential> credentialsList) {
@@ -371,8 +397,7 @@ public class Mongo {
      * @throws MongoException if there's a failure
      */
     public List<ServerAddress> getAllAddress() {
-        //TODO It should return the address list without auto-discovered nodes. Not sure if it's required. Maybe users confused with name.
-        return getServerAddressList();
+        return cluster.getSettings().getHosts();
     }
 
     /**
@@ -383,7 +408,7 @@ public class Mongo {
      */
     public List<ServerAddress> getServerAddressList() {
         List<ServerAddress> serverAddresses = new ArrayList<ServerAddress>();
-        for (final ServerDescription cur : getClusterDescription().getAll()) {
+        for (final ServerDescription cur : getClusterDescription().getServerDescriptions()) {
             serverAddresses.add(cur.getAddress());
         }
         return serverAddresses;
@@ -398,6 +423,7 @@ public class Mongo {
      *
      * @return the address
      */
+    @SuppressWarnings("deprecation")
     public ServerAddress getAddress() {
         ClusterDescription description = getClusterDescription();
         if (description.getPrimaries().isEmpty()) {
@@ -441,14 +467,17 @@ public class Mongo {
      */
     @Deprecated
     public List<String> getDatabaseNames() {
-      return new OperationIterable<DBObject>(new ListDatabasesOperation<DBObject>(MongoClient.getCommandCodec()),
-          primary(), createOperationExecutor())
-          .map(new Function<DBObject, String>() {
-              @Override
-              public String apply(final DBObject result) {
-                  return (String) result.get("name");
-              }
-          }).into(new ArrayList<String>());
+        return new MongoIterableImpl<DBObject>(null, createOperationExecutor(), ReadConcern.DEFAULT, primary()) {
+            @Override
+            ReadOperation<BatchCursor<DBObject>> asReadOperation() {
+                return new ListDatabasesOperation<DBObject>(MongoClient.getCommandCodec());
+            }
+        }.map(new Function<DBObject, String>() {
+            @Override
+            public String apply(final DBObject result) {
+                return (String) result.get("name");
+            }
+        }).into(new ArrayList<String>());
     }
 
     /**
@@ -463,6 +492,8 @@ public class Mongo {
      *
      * @param dbName the name of the database to retrieve
      * @return a DB representing the specified database
+     * @throws IllegalArgumentException if the name is invalid
+     * @see MongoNamespace#checkDatabaseNameValidity(String)
      * @deprecated use {@link com.mongodb.MongoClient#getDatabase(String)}
      */
     @Deprecated
@@ -620,7 +651,7 @@ public class Mongo {
      * @mongodb.driver.manual reference/command/fsync/ fsync command
      */
     public DBObject unlock() {
-        return DBObjects.toDBObject(execute(new FsyncUnlockOperation()));
+        return DBObjects.toDBObject(createOperationExecutor().execute(new FsyncUnlockOperation(), readPreference));
     }
 
     /**
@@ -631,8 +662,8 @@ public class Mongo {
      * @mongodb.driver.manual reference/command/fsync/ fsync command
      */
     public boolean isLocked() {
-        return execute(new CurrentOpOperation(), ReadPreference.primary())
-               .getBoolean("fsyncLock", BsonBoolean.FALSE).getValue();
+        return createOperationExecutor().execute(new CurrentOpOperation(), ReadPreference.primary())
+                       .getBoolean("fsyncLock", BsonBoolean.FALSE).getValue();
     }
 
     @Override
@@ -649,6 +680,7 @@ public class Mongo {
      * @return the maximum size, or 0 if not obtained from servers yet.
      * @throws MongoException if there's a failure
      */
+    @SuppressWarnings("deprecation")
     public int getMaxBsonObjectSize() {
         List<ServerDescription> primaries = getClusterDescription().getPrimaries();
         return primaries.isEmpty() ? ServerDescription.getDefaultMaxDocumentSize() : primaries.get(0).getMaxDocumentSize();
@@ -670,89 +702,70 @@ public class Mongo {
                                  .build();
     }
 
-    private static Cluster createCluster(final MongoClientURI mongoURI) {
+    private static Cluster createCluster(final MongoClientURI mongoURI, final MongoDriverInformation mongoDriverInformation) {
 
         List<MongoCredential> credentialList = mongoURI.getCredentials() != null
-                                               ? asList(mongoURI.getCredentials())
+                                               ? singletonList(mongoURI.getCredentials())
                                                : Collections.<MongoCredential>emptyList();
 
         if (mongoURI.getHosts().size() == 1) {
             return createCluster(new ServerAddress(mongoURI.getHosts().get(0)),
                                  credentialList,
-                                 mongoURI.getOptions());
+                                 mongoURI.getOptions(), null);
         } else {
             List<ServerAddress> seedList = new ArrayList<ServerAddress>(mongoURI.getHosts().size());
             for (final String host : mongoURI.getHosts()) {
                 seedList.add(new ServerAddress(host));
             }
-            return createCluster(seedList, credentialList, mongoURI.getOptions());
+            return createCluster(seedList, credentialList, mongoURI.getOptions(), mongoDriverInformation);
         }
     }
 
     private static Cluster createCluster(final List<ServerAddress> seedList,
-                                         final List<MongoCredential> credentialsList, final MongoClientOptions options) {
-        return createCluster(ClusterSettings.builder().hosts(createNewSeedList(seedList))
-                                            .requiredReplicaSetName(options.getRequiredReplicaSetName())
-                                            .serverSelectionTimeout(options.getServerSelectionTimeout(), MILLISECONDS)
-                                            .serverSelector(createServerSelector(options))
-                                            .description(options.getDescription())
-                                            .maxWaitQueueSize(options.getConnectionPoolSettings().getMaxWaitQueueSize()),
-                             credentialsList, options);
+                                         final List<MongoCredential> credentialsList, final MongoClientOptions options,
+                                         final MongoDriverInformation mongoDriverInformation) {
+        return createCluster(getClusterSettings(seedList, options, ClusterConnectionMode.MULTIPLE), credentialsList, options,
+                mongoDriverInformation);
     }
 
     private static Cluster createCluster(final ServerAddress serverAddress, final List<MongoCredential> credentialsList,
-                                         final MongoClientOptions options) {
-        return createCluster(ClusterSettings.builder()
-                                            .mode(getSingleServerClusterMode(options))
-                                            .hosts(asList(serverAddress))
-                                            .requiredReplicaSetName(options.getRequiredReplicaSetName())
-                                            .serverSelectionTimeout(options.getServerSelectionTimeout(), MILLISECONDS)
-                                            .serverSelector(createServerSelector(options))
-                                            .description(options.getDescription())
-                                            .maxWaitQueueSize(options.getConnectionPoolSettings().getMaxWaitQueueSize()),
-                             credentialsList, options);
+                                         final MongoClientOptions options, final MongoDriverInformation mongoDriverInformation) {
+        return createCluster(getClusterSettings(singletonList(serverAddress), options, getSingleServerClusterMode(options)),
+                credentialsList, options, mongoDriverInformation);
     }
 
-    private static Cluster createCluster(final ClusterSettings.Builder settingsBuilder, final List<MongoCredential> credentialsList,
-                                         final MongoClientOptions options) {
-        for (ClusterListener cur : options.getClusterListeners()) {
-            settingsBuilder.addClusterListener(cur);
+    private static Cluster createCluster(final ClusterSettings clusterSettings, final List<MongoCredential> credentialsList,
+                                         final MongoClientOptions options, final MongoDriverInformation mongoDriverInformation) {
+        return new DefaultClusterFactory().createCluster(clusterSettings,
+                options.getServerSettings(),
+                options.getConnectionPoolSettings(),
+                new SocketStreamFactory(options.getSocketSettings(),
+                                        options.getSslSettings(),
+                                        options.getSocketFactory()),
+                new SocketStreamFactory(options.getHeartbeatSocketSettings(),
+                                        options.getSslSettings(),
+                                        options.getSocketFactory()),
+                credentialsList,
+                getCommandListener(options.getCommandListeners()),
+                options.getApplicationName(),
+                mongoDriverInformation,
+                options.getCompressorList());
+    }
+
+    private static ClusterSettings getClusterSettings(final List<ServerAddress> seedList, final MongoClientOptions options,
+                                                      final ClusterConnectionMode clusterConnectionMode) {
+        ClusterSettings.Builder builder = ClusterSettings.builder()
+                .hosts(new ArrayList<ServerAddress>(seedList))
+                .mode(clusterConnectionMode)
+                .requiredReplicaSetName(options.getRequiredReplicaSetName())
+                .serverSelectionTimeout(options.getServerSelectionTimeout(), MILLISECONDS)
+                .serverSelector(new LatencyMinimizingServerSelector(options.getLocalThreshold(), MILLISECONDS))
+                .description(options.getDescription())
+                .maxWaitQueueSize(options.getConnectionPoolSettings().getMaxWaitQueueSize());
+        for (ClusterListener clusterListener: options.getClusterListeners()) {
+            builder.addClusterListener(clusterListener);
         }
-        return new DefaultClusterFactory().create(settingsBuilder.build(),
-                                                  options.getServerSettings(),
-                                                  options.getConnectionPoolSettings(),
-                                                  new SocketStreamFactory(options.getSocketSettings(),
-                                                                          options.getSslSettings(),
-                                                                          options.getSocketFactory()),
-                                                  new SocketStreamFactory(options.getHeartbeatSocketSettings(),
-                                                                          options.getSslSettings(),
-                                                                          options.getSocketFactory()),
-                                                  credentialsList, null,
-                                                  new JMXConnectionPoolListener(), null,
-                                                  createCommandListener(options.getCommandListeners()));
-    }
-
-    private static CommandListener createCommandListener(final List<CommandListener> commandListeners) {
-        switch (commandListeners.size()) {
-            case 0:
-                return null;
-            case 1:
-                return commandListeners.get(0);
-            default:
-                return new CommandEventMulticaster(commandListeners);
-        }
-    }
-
-    private static List<ServerAddress> createNewSeedList(final List<ServerAddress> seedList) {
-        List<ServerAddress> retVal = new ArrayList<ServerAddress>(seedList.size());
-        for (final ServerAddress cur : seedList) {
-            retVal.add(cur);
-        }
-        return retVal;
-    }
-
-    private static ServerSelector createServerSelector(final MongoClientOptions options) {
-        return new LatencyMinimizingServerSelector(options.getLocalThreshold(), MILLISECONDS);
+        return builder.build();
     }
 
     Cluster getCluster() {
@@ -775,18 +788,6 @@ public class Mongo {
         return credentialsList;
     }
 
-    WriteBinding getWriteBinding() {
-        return getReadWriteBinding(primary());
-    }
-
-    ReadBinding getReadBinding(final ReadPreference readPreference) {
-        return getReadWriteBinding(readPreference);
-    }
-
-    private ReadWriteBinding getReadWriteBinding(final ReadPreference readPreference) {
-        return new ClusterBinding(getCluster(), readPreference);
-    }
-
     void addOrphanedCursor(final ServerCursor serverCursor, final MongoNamespace namespace) {
         orphanedCursors.add(new ServerCursorAndNamespace(serverCursor, namespace));
     }
@@ -795,36 +796,176 @@ public class Mongo {
         return new OperationExecutor() {
             @Override
             public <T> T execute(final ReadOperation<T> operation, final ReadPreference readPreference) {
-                return Mongo.this.execute(operation, readPreference);
+                return execute(operation, readPreference, null);
             }
 
             @Override
             public <T> T execute(final WriteOperation<T> operation) {
-                return Mongo.this.execute(operation);
+                return execute(operation, null);
+            }
+
+            @Override
+            public <T> T execute(final ReadOperation<T> operation, final ReadPreference readPreference, final ClientSession session) {
+                ClientSession actualClientSession = getClientSession(session);
+                ReadBinding binding = getReadBinding(readPreference, actualClientSession, session == null && actualClientSession != null);
+                try {
+                    return operation.execute(binding);
+                } finally {
+                    binding.release();
+                }
+            }
+
+            @Override
+            public <T> T execute(final WriteOperation<T> operation, final ClientSession session) {
+                ClientSession actualClientSession = getClientSession(session);
+                WriteBinding binding = getWriteBinding(actualClientSession, session == null && actualClientSession != null);
+                try {
+                    return operation.execute(binding);
+                } finally {
+                    binding.release();
+                }
+            }
+
+            WriteBinding getWriteBinding(final ClientSession session, final boolean ownsSession) {
+                return getReadWriteBinding(primary(), session, ownsSession);
+            }
+
+            ReadBinding getReadBinding(final ReadPreference readPreference, final ClientSession session, final boolean ownsSession) {
+                return getReadWriteBinding(readPreference, session, ownsSession);
+            }
+
+            ReadWriteBinding getReadWriteBinding(final ReadPreference readPreference, final ClientSession session,
+                                                         final boolean ownsSession) {
+                ReadWriteBinding readWriteBinding = new ClusterBinding(getCluster(), readPreference);
+                if (session != null) {
+                    readWriteBinding = new ClientSessionBinding(session, ownsSession, readWriteBinding);
+                }
+                return readWriteBinding;
+            }
+
+            ClientSession getClientSession(final ClientSession clientSessionFromOperation) {
+                ClientSession session;
+                if (clientSessionFromOperation != null) {
+                    isTrue("ClientSession from same MongoClient", clientSessionFromOperation.getMongoClient() == Mongo.this);
+                    session = clientSessionFromOperation;
+                } else {
+                    session = createClientSession(ClientSessionOptions.builder().build());
+                }
+                return session;
             }
         };
     }
 
-    <T> T execute(final ReadOperation<T> operation, final ReadPreference readPreference) {
-        ReadBinding binding = getReadBinding(readPreference);
-        try {
-            return operation.execute(binding);
-        } finally {
-            binding.release();
+    ClientSession createClientSession(final ClientSessionOptions options) {
+        if (cluster.getDescription().getLogicalSessionTimeoutMinutes() != null) {
+            return new ClientSessionImpl(this, options);
+        } else {
+            return null;
         }
     }
 
-    <T> T execute(final WriteOperation<T> operation) {
-        WriteBinding binding = getWriteBinding();
-        try {
-            return operation.execute(binding);
-        } finally {
-            binding.release();
+    static class ClientSessionImpl implements ClientSession {
+        private static final String CLUSTER_TIME_KEY = "clusterTime";
+
+        private final Mongo mongo;
+        private final ServerSession serverSession;
+        private final ClientSessionOptions options;
+        private BsonDocument clusterTime;
+        private BsonTimestamp operationTime;
+        private volatile boolean closed;
+
+        ClientSessionImpl(final Mongo mongo, final ClientSessionOptions options) {
+            this.mongo = mongo;
+            this.serverSession = mongo.serverSessionPool.get();
+            this.options = options;
+            clusterTime = options.getInitialClusterTime();
+            operationTime = options.getInitialOperationTime();
+            closed = false;
+        }
+
+        @Override
+        public ClientSessionOptions getOptions() {
+            return options;
+        }
+
+        @Override
+        public boolean isCausallyConsistent() {
+            return options.isCausallyConsistent() == null ? false : options.isCausallyConsistent();
+        }
+
+        @Override
+        public BsonDocument getClusterTime() {
+            return clusterTime;
+        }
+
+        @Override
+        public BsonTimestamp getOperationTime() {
+            return operationTime;
+        }
+
+        @Override
+        public MongoClient getMongoClient() {
+            isTrue("open", !closed);
+            if (mongo instanceof MongoClient) {
+                return (MongoClient) mongo;
+            }
+            return null;
+        }
+
+        @Override
+        public ServerSession getServerSession() {
+            isTrue("open", !closed);
+            return serverSession;
+        }
+
+        @Override
+        public void advanceOperationTime(final BsonTimestamp operationTime) {
+            isTrue("open", !closed);
+            this.operationTime = operationTime; // TODO: ensure it's advancing
+        }
+
+        @Override
+        public void advanceClusterTime(final BsonDocument clusterTime) {
+            isTrue("open", !closed);
+            if (this.clusterTime == null
+                        || clusterTime.getTimestamp(CLUSTER_TIME_KEY).compareTo(this.clusterTime.getTimestamp(CLUSTER_TIME_KEY)) > 0) {
+                this.clusterTime = clusterTime;
+            }
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                mongo.serverSessionPool.release(serverSession);
+            }
+        }
+    }
+
+    private final ConcurrentPool<ServerSession> serverSessionPool =
+            new ConcurrentPool<ServerSession>(Integer.MAX_VALUE, new ServerSessionItemFactory());
+
+    private static class ServerSessionImpl implements ServerSession {
+        private final BsonDocument identifier;
+        private int transactionNumber;
+
+        ServerSessionImpl(final BsonBinary identifier) {
+            this.identifier = new BsonDocument("id", identifier);
+        }
+
+        @Override
+        public BsonDocument getIdentifier() {
+            return identifier;
+        }
+
+        @Override
+        public long advanceTransactionNumber() {
+            return transactionNumber++;
         }
     }
 
     private ExecutorService createCursorCleaningService() {
-        ScheduledExecutorService newTimer = Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory());
+        ScheduledExecutorService newTimer = Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory("CleanCursors"));
         newTimer.scheduleAtFixedRate(new Runnable() {
             @Override
             public void run() {
@@ -868,9 +1009,38 @@ public class Mongo {
         private final ServerCursor serverCursor;
         private final MongoNamespace namespace;
 
-        public ServerCursorAndNamespace(final ServerCursor serverCursor, final MongoNamespace namespace) {
+        ServerCursorAndNamespace(final ServerCursor serverCursor, final MongoNamespace namespace) {
             this.serverCursor = serverCursor;
             this.namespace = namespace;
+        }
+    }
+
+
+    private static final class ServerSessionItemFactory implements ConcurrentPool.ItemFactory<ServerSession> {
+        @Override
+        public ServerSession create(final boolean initialize) {
+            return new ServerSessionImpl(createNewServerSessionIdentifier());
+        }
+
+        @Override
+        public void close(final ServerSession serverSession) {
+            // TODO: pruning
+        }
+
+        @Override
+        public boolean shouldPrune(final ServerSession serverSession) {
+            return false;
+        }
+
+        private BsonBinary createNewServerSessionIdentifier() {
+            UuidCodec uuidCodec = new UuidCodec(UuidRepresentation.STANDARD);
+            BsonDocument holder = new BsonDocument();
+            BsonDocumentWriter bsonDocumentWriter = new BsonDocumentWriter(holder);
+            bsonDocumentWriter.writeStartDocument();
+            bsonDocumentWriter.writeName("id");
+            uuidCodec.encode(bsonDocumentWriter, UUID.randomUUID(), EncoderContext.builder().build());
+            bsonDocumentWriter.writeEndDocument();
+            return holder.getBinary("id");
         }
     }
 

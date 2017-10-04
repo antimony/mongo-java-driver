@@ -57,7 +57,7 @@ public final class Updates {
      * @param updates the list of updates
      * @return a combined update
      */
-    public static Bson combine(final List<Bson> updates) {
+    public static Bson combine(final List<? extends Bson> updates) {
         notNull("updates", updates);
         return new CompositeUpdate(updates);
     }
@@ -118,7 +118,7 @@ public final class Updates {
      * Creates an update that increments the value of the field with the given name by the given value.
      *
      * @param fieldName the non-null field name
-     * @param number     the value
+     * @param number    the value
      * @return the update
      * @mongodb.driver.manual reference/operator/update/inc/ $inc
      */
@@ -212,7 +212,7 @@ public final class Updates {
      * already present, in which case it does nothing
      *
      * @param fieldName the non-null field name
-     * @param values     the values
+     * @param values    the values
      * @param <TItem>   the value type
      * @return the update
      * @mongodb.driver.manual reference/operator/update/addToSet/ $addToSet
@@ -424,7 +424,7 @@ public final class Updates {
         private final TItem value;
         private final String operator;
 
-        public SimpleUpdate(final String fieldName, final TItem value, final String operator) {
+        SimpleUpdate(final String fieldName, final TItem value, final String operator) {
             this.fieldName = notNull("fieldName", fieldName);
             this.value = value;
             this.operator = operator;
@@ -446,6 +446,15 @@ public final class Updates {
 
             return writer.getDocument();
         }
+
+        @Override
+        public String toString() {
+            return "Update{"
+                           + "fieldName='" + fieldName + '\''
+                           + ", operator='" + operator + '\''
+                           + ", value=" + value
+                           + '}';
+        }
     }
 
     private static class WithEachUpdate<TItem> implements Bson {
@@ -453,7 +462,7 @@ public final class Updates {
         private final List<TItem> values;
         private final String operator;
 
-        public WithEachUpdate(final String fieldName, final List<TItem> values, final String operator) {
+        WithEachUpdate(final String fieldName, final List<TItem> values, final String operator) {
             this.fieldName = notNull("fieldName", fieldName);
             this.values = notNull("values", values);
             this.operator = operator;
@@ -490,13 +499,28 @@ public final class Updates {
         protected <TDocument> void writeAdditionalFields(final BsonDocumentWriter writer, final Class<TDocument> tDocumentClass,
                                                          final CodecRegistry codecRegistry) {
         }
+
+
+        protected String additionalFieldsToString() {
+            return "";
+        }
+
+        @Override
+        public String toString() {
+            return "Each Update{"
+                           + "fieldName='" + fieldName + '\''
+                           + ", operator='" + operator + '\''
+                           + ", values=" + values
+                           + additionalFieldsToString()
+                           + '}';
+        }
     }
 
     private static class PushUpdate<TItem> extends WithEachUpdate<TItem> {
 
         private final PushOptions options;
 
-        public PushUpdate(final String fieldName, final List<TItem> values, final PushOptions options) {
+        PushUpdate(final String fieldName, final List<TItem> values, final PushOptions options) {
             super(fieldName, values, "$push");
             this.options = notNull("options", options);
         }
@@ -517,13 +541,18 @@ public final class Updates {
                 encodeValue(writer, options.getSortDocument(), codecRegistry);
             }
         }
+
+        @Override
+        protected String additionalFieldsToString() {
+            return ", options=" + options;
+        }
     }
 
     private static class PullAllUpdate<TItem> implements Bson {
         private final String fieldName;
         private final List<TItem> values;
 
-        public PullAllUpdate(final String fieldName, final List<TItem> values) {
+        PullAllUpdate(final String fieldName, final List<TItem> values) {
             this.fieldName = notNull("fieldName", fieldName);
             this.values = notNull("values", values);
         }
@@ -550,12 +579,21 @@ public final class Updates {
 
             return writer.getDocument();
         }
+
+        @Override
+        public String toString() {
+            return "Update{"
+                           + "fieldName='" + fieldName + '\''
+                           + ", operator='$pullAll'"
+                           + ", value=" + values
+                           + '}';
+        }
     }
 
     private static class CompositeUpdate implements Bson {
-        private final List<Bson> updates;
+        private final List<? extends Bson> updates;
 
-        public CompositeUpdate(final List<Bson> updates) {
+        CompositeUpdate(final List<? extends Bson> updates) {
             this.updates = updates;
         }
 
@@ -571,7 +609,7 @@ public final class Updates {
                         BsonDocument existingOperatorDocument = document.getDocument(element.getKey());
                         for (Map.Entry<String, BsonValue> currentOperationDocumentElements : currentOperatorDocument.entrySet()) {
                             existingOperatorDocument.append(currentOperationDocumentElements.getKey(),
-                                                            currentOperationDocumentElements.getValue());
+                                    currentOperationDocumentElements.getValue());
                         }
                     } else {
                         document.append(element.getKey(), element.getValue());
@@ -580,6 +618,13 @@ public final class Updates {
             }
 
             return document;
+        }
+
+        @Override
+        public String toString() {
+            return "Updates{"
+                           + "updates=" + updates
+                           + '}';
         }
     }
 

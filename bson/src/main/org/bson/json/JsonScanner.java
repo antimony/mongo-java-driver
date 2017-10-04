@@ -27,6 +27,14 @@ class JsonScanner {
 
     private final JsonBuffer buffer;
 
+    JsonScanner(final JsonBuffer buffer) {
+        this.buffer = buffer;
+    }
+
+    JsonScanner(final String json) {
+        this(new JsonBuffer(json));
+    }
+
     /**
      * @param newPosition the new position of the cursor position in the buffer
      */
@@ -39,24 +47,6 @@ class JsonScanner {
      */
     public int getBufferPosition() {
         return buffer.getPosition();
-    }
-
-    /**
-     * Constructs a a new {@code JSONScanner} that produces values scanned from specified {@code JSONBuffer}.
-     *
-     * @param buffer A buffer to be scanned.
-     */
-    public JsonScanner(final JsonBuffer buffer) {
-        this.buffer = buffer;
-    }
-
-    /**
-     * Constructs a a new {@code JSONScanner} that produces values scanned from the specified {@code String}.
-     *
-     * @param json A string representation of a JSON to be scanned.
-     */
-    public JsonScanner(final String json) {
-        this(new JsonBuffer(json));
     }
 
     /**
@@ -134,6 +124,9 @@ class JsonScanner {
             switch (state) {
                 case IN_PATTERN:
                     switch (c) {
+                        case -1:
+                            state = RegularExpressionState.INVALID;
+                            break;
                         case '/':
                             state = RegularExpressionState.IN_OPTIONS;
                             options = buffer.getPosition();
@@ -174,6 +167,7 @@ class JsonScanner {
                     }
                     break;
                 default:
+                    break;
             }
 
             switch (state) {

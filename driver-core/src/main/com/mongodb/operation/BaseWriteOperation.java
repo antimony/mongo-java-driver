@@ -32,6 +32,7 @@ import com.mongodb.bulk.BulkWriteResult;
 import com.mongodb.bulk.WriteRequest;
 import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
+import com.mongodb.connection.SessionContext;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
@@ -46,10 +47,9 @@ import static com.mongodb.internal.async.ErrorHandlingResultCallback.errorHandli
 import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnection;
 import static com.mongodb.operation.OperationHelper.CallableWithConnection;
 import static com.mongodb.operation.OperationHelper.LOGGER;
-import static com.mongodb.operation.OperationHelper.bypassDocumentValidationNotSupported;
-import static com.mongodb.operation.OperationHelper.getBypassDocumentValidationException;
+import static com.mongodb.operation.OperationHelper.checkBypassDocumentValidationIsSupported;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
-import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionTwoDotSix;
+import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionThreeDotSix;
 import static com.mongodb.operation.OperationHelper.withConnection;
 
 
@@ -135,11 +135,14 @@ public abstract class BaseWriteOperation implements AsyncWriteOperation<WriteCon
             @Override
             public WriteConcernResult call(final Connection connection) {
                 try {
-                    if (bypassDocumentValidationNotSupported(bypassDocumentValidation, writeConcern, connection.getDescription())) {
-                        throw getBypassDocumentValidationException();
-                    }
-                    if (writeConcern.isAcknowledged() && serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
-                        return translateBulkWriteResult(executeCommandProtocol(connection));
+                    checkBypassDocumentValidationIsSupported(connection, bypassDocumentValidation, writeConcern);
+                    if (writeConcern.isAcknowledged() || serverIsAtLeastVersionThreeDotSix(connection.getDescription())) {
+                        BulkWriteResult bulkWriteResult = executeCommandProtocol(connection, binding.getSessionContext());
+                        if (writeConcern.isAcknowledged()) {
+                            return translateBulkWriteResult(bulkWriteResult);
+                        } else {
+                            return WriteConcernResult.unacknowledged();
+                        }
                     } else {
                         return executeProtocol(connection);
                     }
@@ -155,36 +158,49 @@ public abstract class BaseWriteOperation implements AsyncWriteOperation<WriteCon
         withConnection(binding, new AsyncCallableWithConnection() {
             @Override
             public void call(final AsyncConnection connection, final Throwable t) {
-                SingleResultCallback<WriteConcernResult> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
+                final SingleResultCallback<WriteConcernResult> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
                     errHandlingCallback.onResult(null, t);
-                } else if (bypassDocumentValidationNotSupported(bypassDocumentValidation, writeConcern, connection.getDescription())) {
-                    releasingCallback(errHandlingCallback, connection).onResult(null, getBypassDocumentValidationException());
                 } else {
-                    final SingleResultCallback<WriteConcernResult> wrappedCallback = releasingCallback(errHandlingCallback, connection);
-                    if (writeConcern.isAcknowledged() && serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
-                        executeCommandProtocolAsync(connection, new SingleResultCallback<BulkWriteResult>() {
-                            @Override
-                            public void onResult(final BulkWriteResult result, final Throwable t) {
-                                if (t != null) {
-                                    wrappedCallback.onResult(null, translateException(t));
-                                } else {
-                                    wrappedCallback.onResult(translateBulkWriteResult(result), null);
+                    checkBypassDocumentValidationIsSupported(connection, bypassDocumentValidation, writeConcern,
+                            new AsyncCallableWithConnection() {
+                                @Override
+                                public void call(final AsyncConnection connection, final Throwable t1) {
+                                    if (t1 != null) {
+                                        releasingCallback(errHandlingCallback, connection).onResult(null, t1);
+                                    } else {
+                                        final SingleResultCallback<WriteConcernResult> wrappedCallback =
+                                                releasingCallback(errHandlingCallback, connection);
+                                        if (writeConcern.isAcknowledged()
+                                            || serverIsAtLeastVersionThreeDotSix(connection.getDescription())) {
+                                            executeCommandProtocolAsync(connection, binding.getSessionContext(),
+                                                    new SingleResultCallback<BulkWriteResult>() {
+                                                        @Override
+                                                        public void onResult(final BulkWriteResult result, final Throwable t) {
+                                                            if (t != null) {
+                                                                wrappedCallback.onResult(null, translateException(t));
+                                                            } else if (writeConcern.isAcknowledged()) {
+                                                                wrappedCallback.onResult(translateBulkWriteResult(result), null);
+                                                            } else {
+                                                                wrappedCallback.onResult(WriteConcernResult.unacknowledged(), null);
+                                                            }
+                                                        }
+                                                    });
+                                        } else {
+                                            executeProtocolAsync(connection, new SingleResultCallback<WriteConcernResult>() {
+                                                @Override
+                                                public void onResult(final WriteConcernResult result, final Throwable t) {
+                                                    if (t != null) {
+                                                        wrappedCallback.onResult(null, translateException(t));
+                                                    } else {
+                                                        wrappedCallback.onResult(result, null);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
                                 }
-                            }
-                        });
-                    } else {
-                        executeProtocolAsync(connection, new SingleResultCallback<WriteConcernResult>() {
-                            @Override
-                            public void onResult(final WriteConcernResult result, final Throwable t) {
-                                if (t != null) {
-                                    wrappedCallback.onResult(null, translateException(t));
-                                } else {
-                                    wrappedCallback.onResult(result, null);
-                                }
-                            }
-                        });
-                    }
+                            });
                 }
             }
         });
@@ -209,16 +225,19 @@ public abstract class BaseWriteOperation implements AsyncWriteOperation<WriteCon
      * Executes the write command protocol.
      *
      * @param connection the connection
+     * @param sessionContext the session context
      * @return the result
      */
-    protected abstract BulkWriteResult executeCommandProtocol(Connection connection);
+    protected abstract BulkWriteResult executeCommandProtocol(Connection connection, SessionContext sessionContext);
 
     /**
      * Asynchronously executes the write command protocol.
-     *  @param connection the connection
+     * @param connection the connection
+     * @param sessionContext the session context
      * @param callback   the callback to be passed the BulkWriteResult
      */
-    protected abstract void executeCommandProtocolAsync(AsyncConnection connection, SingleResultCallback<BulkWriteResult> callback);
+    protected abstract void executeCommandProtocolAsync(AsyncConnection connection, SessionContext sessionContext,
+                                                        SingleResultCallback<BulkWriteResult> callback);
 
     private MongoException translateException(final Throwable t) {
         MongoException checkedError = MongoException.fromThrowable(t);

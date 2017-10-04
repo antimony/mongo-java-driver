@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,10 @@
 
 package org.bson;
 
+import org.bson.types.Decimal128;
 import org.bson.types.ObjectId;
+
+import java.util.List;
 
 /**
  * An interface for writing a logical BSON document using a push-oriented API.
@@ -143,6 +146,23 @@ public interface BsonWriter {
      * @param value The Int64 value.
      */
     void writeInt64(String name, long value);
+
+    /**
+     * Writes a BSON Decimal128 to the writer.
+     *
+     * @param value The Decimal128 value.
+     * @since 3.4
+     */
+    void writeDecimal128(Decimal128 value);
+
+    /**
+     * Writes a BSON Decimal128 element to the writer.
+     *
+     * @param name  The name of the element.
+     * @param value The Decimal128 value.
+     * @since 3.4
+     */
+    void writeDecimal128(String name, Decimal128 value);
 
     /**
      * Writes a BSON JavaScript to the writer.
@@ -338,4 +358,14 @@ public interface BsonWriter {
      * @param reader The source.
      */
     void pipe(BsonReader reader);
+
+    /**
+     * Reads a single document from a BsonReader and writes it to this, appending the given extra elements to the end of
+     * the document.
+     *
+     * @param reader The source.
+     * @param extraElements The extra BSON elements to append
+     * @since 3.6
+     */
+    void pipe(BsonReader reader, List<BsonElement> extraElements);
 }

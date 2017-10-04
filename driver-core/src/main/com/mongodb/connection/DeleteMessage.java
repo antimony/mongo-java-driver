@@ -27,25 +27,12 @@ import java.util.List;
  *
  * @mongodb.driver.manual ../meta-driver/latest/legacy/mongodb-wire-protocol/#op-delete OP_DELETE
  */
-class DeleteMessage extends RequestMessage {
+class DeleteMessage extends LegacyMessage {
     private final List<DeleteRequest> deleteRequests;
 
-    /**
-     * Construct an instance.
-     *
-     * @param collectionName the collection name
-     * @param deletes        the list of delete requests
-     * @param settings       the message settings
-     */
-    public DeleteMessage(final String collectionName, final List<DeleteRequest> deletes,
-                         final MessageSettings settings) {
+    DeleteMessage(final String collectionName, final List<DeleteRequest> deletes, final MessageSettings settings) {
         super(collectionName, OpCode.OP_DELETE, settings);
         this.deleteRequests = deletes;
-    }
-
-    @Override
-    protected RequestMessage encodeMessageBody(final BsonOutput bsonOutput, final int messageStartPosition) {
-        return encodeMessageBodyWithMetadata(bsonOutput, messageStartPosition).getNextMessage();
     }
 
     @Override

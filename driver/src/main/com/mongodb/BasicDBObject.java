@@ -16,7 +16,6 @@
 
 package com.mongodb;
 
-import com.mongodb.util.JSON;
 import org.bson.BasicBSONObject;
 import org.bson.BsonDocument;
 import org.bson.BsonDocumentWrapper;
@@ -134,13 +133,15 @@ public class BasicDBObject extends BasicBSONObject implements DBObject, Bson {
     }
 
     /**
-     * Gets a JSON representation of this document
-     *
-     * <p>With the default {@link JsonWriterSettings} and {@link DBObjectCodec}.</p>
+     * Gets a JSON representation of this document using the {@link org.bson.json.JsonMode#STRICT} output mode, and otherwise the default
+     * settings of {@link JsonWriterSettings.Builder} and {@link DBObjectCodec}.
      *
      * @return a JSON representation of this document
      * @throws org.bson.codecs.configuration.CodecConfigurationException if the document contains types not in the default registry
+     * @see #toJson(JsonWriterSettings)
+     * @see JsonWriterSettings
      */
+    @SuppressWarnings("deprecation")
     public String toJson() {
         return toJson(new JsonWriterSettings());
     }
@@ -167,6 +168,7 @@ public class BasicDBObject extends BasicBSONObject implements DBObject, Bson {
      * @return a JSON representation of this document
      * @throws org.bson.codecs.configuration.CodecConfigurationException if the registry does not contain a codec for the document values.
      */
+    @SuppressWarnings("deprecation")
     public String toJson(final Encoder<BasicDBObject> encoder) {
         return toJson(new JsonWriterSettings(), encoder);
     }
@@ -192,8 +194,9 @@ public class BasicDBObject extends BasicBSONObject implements DBObject, Bson {
      *
      * @return JSON serialization
      */
+    @SuppressWarnings("deprecation")
     public String toString() {
-        return JSON.serialize(this);
+        return com.mongodb.util.JSON.serialize(this);
     }
 
     /**

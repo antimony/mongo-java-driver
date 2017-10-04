@@ -17,6 +17,7 @@
 package com.mongodb.async.client;
 
 import com.mongodb.async.SingleResultCallback;
+import com.mongodb.client.model.Collation;
 
 import java.util.concurrent.TimeUnit;
 
@@ -49,19 +50,37 @@ public interface AggregateIterable<TResult> extends MongoIterable<TResult> {
     AggregateIterable<TResult> maxTime(long maxTime, TimeUnit timeUnit);
 
     /**
+     * The maximum amount of time for the server to wait on new documents to satisfy a {@code $changeStream} aggregation.
+     *
+     * A zero value will be ignored.
+     *
+     * @param maxAwaitTime  the max await time
+     * @param timeUnit the time unit to return the result in
+     * @return the maximum await execution time in the given time unit
+     * @mongodb.server.release 3.6
+     * @since 3.6
+     */
+    AggregateIterable<TResult> maxAwaitTime(long maxAwaitTime, TimeUnit timeUnit);
+
+    /**
      * Sets whether the server should use a cursor to return results.
      *
      * @param useCursor whether the server should use a cursor to return results
      * @return this
      * @mongodb.driver.manual reference/command/aggregate/ Aggregation
      * @mongodb.server.release 2.6
+     * @deprecated There is no replacement for this.  Applications can assume that the driver will use a cursor for server versions
+     * that support it (&gt;= 2.6).  The driver will ignore this as of MongoDB 3.6, which does not support inline results for the aggregate
+     * command.
      */
+    @Deprecated
     AggregateIterable<TResult> useCursor(Boolean useCursor);
 
     /**
      * Aggregates documents according to the specified aggregation pipeline, which must end with a $out stage.
      *
      * @param callback the callback, which is called when the aggregation completes
+     * @throws IllegalStateException if the pipeline does not end with a $out stage
      * @mongodb.driver.manual aggregation/ Aggregation
      */
     void toCollection(SingleResultCallback<Void> callback);
@@ -87,4 +106,15 @@ public interface AggregateIterable<TResult> extends MongoIterable<TResult> {
      * @mongodb.server.release 3.2
      */
     AggregateIterable<TResult> bypassDocumentValidation(Boolean bypassDocumentValidation);
+
+    /**
+     * Sets the collation options
+     *
+     * <p>A null value represents the server default.</p>
+     * @param collation the collation options to use
+     * @return this
+     * @since 3.4
+     * @mongodb.server.release 3.4
+     */
+    AggregateIterable<TResult> collation(Collation collation);
 }

@@ -29,6 +29,7 @@ import com.mongodb.async.client.MongoClients
 import com.mongodb.async.client.TestOperationExecutor
 import com.mongodb.client.gridfs.model.GridFSFile
 import com.mongodb.client.gridfs.codecs.GridFSFileCodec
+import com.mongodb.client.model.Collation
 import com.mongodb.client.model.FindOptions
 import com.mongodb.operation.FindOperation
 import org.bson.BsonDocument
@@ -44,12 +45,12 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS
 import static spock.util.matcher.HamcrestSupport.expect
 
 class GridFSFindIterableSpecification extends Specification {
-
     def codecRegistry = MongoClients.getDefaultCodecRegistry()
     def gridFSFileCodec = new GridFSFileCodec(codecRegistry)
     def readPreference = secondary()
     def readConcern = ReadConcern.DEFAULT
     def namespace = new MongoNamespace('test', 'fs.files')
+    def collation = Collation.builder().locale('en').build()
 
     def 'should build the expected findOperation'() {
         given:
@@ -65,7 +66,8 @@ class GridFSFindIterableSpecification extends Specification {
         def readPreference = executor.getReadPreference()
 
         then:
-        expect operation, isTheSameAs(new FindOperation<GridFSFile>(namespace, gridFSFileCodec).filter(new BsonDocument()).slaveOk(true))
+        expect operation, isTheSameAs(new FindOperation<GridFSFile>(namespace, gridFSFileCodec).filter(new BsonDocument())
+                .slaveOk(true))
         readPreference == secondary()
 
         when: 'overriding initial options'
@@ -76,6 +78,7 @@ class GridFSFindIterableSpecification extends Specification {
                 .limit(99)
                 .skip(9)
                 .noCursorTimeout(true)
+                .collation(collation)
                 .batchCursor(Stub(SingleResultCallback))
 
         operation = executor.getReadOperation() as FindOperation<GridFSFile>
@@ -90,6 +93,7 @@ class GridFSFindIterableSpecification extends Specification {
                 .skip(9)
                 .noCursorTimeout(true)
                 .slaveOk(true)
+                .collation(collation)
         )
     }
 

@@ -38,24 +38,25 @@ import com.mongodb.event.ConnectionRemovedEvent;
 import com.mongodb.internal.connection.ConcurrentPool;
 import com.mongodb.internal.thread.DaemonThreadFactory;
 import org.bson.ByteBuf;
+import org.bson.codecs.Decoder;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.mongodb.assertions.Assertions.isTrue;
 import static com.mongodb.assertions.Assertions.notNull;
 import static com.mongodb.internal.async.ErrorHandlingResultCallback.errorHandlingCallback;
+import static com.mongodb.internal.event.EventListenerHelper.getConnectionPoolListener;
 import static java.lang.String.format;
-import static java.lang.Thread.currentThread;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 class DefaultConnectionPool implements ConnectionPool {
     private static final Logger LOGGER = Loggers.getLogger("connection");
-    private static final DaemonThreadFactory THREAD_FACTORY = new DaemonThreadFactory();
 
     private final ConcurrentPool<UsageTrackingInternalConnection> pool;
     private final ConnectionPoolSettings settings;
@@ -68,17 +69,16 @@ class DefaultConnectionPool implements ConnectionPool {
     private final ServerId serverId;
     private volatile boolean closed;
 
-    public DefaultConnectionPool(final ServerId serverId,
-                                 final InternalConnectionFactory internalConnectionFactory, final ConnectionPoolSettings settings,
-                                 final ConnectionPoolListener connectionPoolListener) {
+    DefaultConnectionPool(final ServerId serverId, final InternalConnectionFactory internalConnectionFactory,
+                          final ConnectionPoolSettings settings) {
         this.serverId = notNull("serverId", serverId);
         this.settings = notNull("settings", settings);
         UsageTrackingInternalConnectionItemFactory connectionItemFactory
         = new UsageTrackingInternalConnectionItemFactory(internalConnectionFactory);
         pool = new ConcurrentPool<UsageTrackingInternalConnection>(settings.getMaxSize(), connectionItemFactory);
         maintenanceTask = createMaintenanceTask();
-        sizeMaintenanceTimer = createTimer();
-        this.connectionPoolListener = notNull("connectionPoolListener", connectionPoolListener);
+        sizeMaintenanceTimer = createMaintenanceTimer();
+        this.connectionPoolListener = getConnectionPoolListener(settings);
         connectionPoolListener.connectionPoolOpened(new ConnectionPoolOpenedEvent(serverId, settings));
     }
 
@@ -94,7 +94,7 @@ class DefaultConnectionPool implements ConnectionPool {
                 throw createWaitQueueFullException();
             }
             try {
-                connectionPoolListener.waitQueueEntered(new ConnectionPoolWaitQueueEnteredEvent(serverId, currentThread().getId()));
+                connectionPoolListener.waitQueueEntered(new ConnectionPoolWaitQueueEnteredEvent(serverId));
                 PooledConnection pooledConnection = getPooledConnection(timeout, timeUnit);
                 if (!pooledConnection.opened()) {
                     try {
@@ -111,7 +111,7 @@ class DefaultConnectionPool implements ConnectionPool {
 
                 return pooledConnection;
             } finally {
-                connectionPoolListener.waitQueueExited(new ConnectionPoolWaitQueueExitedEvent(serverId, currentThread().getId()));
+                connectionPoolListener.waitQueueExited(new ConnectionPoolWaitQueueExitedEvent(serverId));
             }
         } finally {
             waitQueueSize.decrementAndGet();
@@ -151,7 +151,7 @@ class DefaultConnectionPool implements ConnectionPool {
             callback.onResult(null, createWaitQueueFullException());
         } else {
             final long startTimeMillis = System.currentTimeMillis();
-            connectionPoolListener.waitQueueEntered(new ConnectionPoolWaitQueueEnteredEvent(serverId, currentThread().getId()));
+            connectionPoolListener.waitQueueEntered(new ConnectionPoolWaitQueueEnteredEvent(serverId));
             getAsyncGetter().submit(new Runnable() {
                 @Override
                 public void run() {
@@ -166,7 +166,7 @@ class DefaultConnectionPool implements ConnectionPool {
                         errHandlingCallback.onResult(null, t);
                     } finally {
                         waitQueueSize.decrementAndGet();
-                        connectionPoolListener.waitQueueExited(new ConnectionPoolWaitQueueExitedEvent(serverId, currentThread().getId()));
+                        connectionPoolListener.waitQueueExited(new ConnectionPoolWaitQueueExitedEvent(serverId));
                     }
                 }
 
@@ -214,7 +214,7 @@ class DefaultConnectionPool implements ConnectionPool {
 
     private synchronized ExecutorService getAsyncGetter() {
         if (asyncGetter == null) {
-            asyncGetter = Executors.newSingleThreadExecutor(THREAD_FACTORY);
+            asyncGetter = Executors.newSingleThreadExecutor(new DaemonThreadFactory("AsyncGetter"));
         }
         return asyncGetter;
     }
@@ -311,11 +311,11 @@ class DefaultConnectionPool implements ConnectionPool {
         return newMaintenanceTask;
     }
 
-    private ExecutorService createTimer() {
+    private ExecutorService createMaintenanceTimer() {
         if (maintenanceTask == null) {
             return null;
         } else {
-            ScheduledExecutorService newTimer = Executors.newSingleThreadScheduledExecutor(THREAD_FACTORY);
+            ScheduledExecutorService newTimer = Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory("MaintenanceTimer"));
             newTimer.scheduleAtFixedRate(maintenanceTask, settings.getMaintenanceInitialDelay(MILLISECONDS),
                                          settings.getMaintenanceFrequency(MILLISECONDS), MILLISECONDS);
             return newTimer;
@@ -372,47 +372,48 @@ class DefaultConnectionPool implements ConnectionPool {
     }
 
     private class PooledConnection implements InternalConnection {
-        private volatile UsageTrackingInternalConnection wrapped;
+        private final UsageTrackingInternalConnection wrapped;
+        private final AtomicBoolean isClosed = new AtomicBoolean();
 
-        public PooledConnection(final UsageTrackingInternalConnection wrapped) {
+        PooledConnection(final UsageTrackingInternalConnection wrapped) {
             this.wrapped = notNull("wrapped", wrapped);
         }
 
         @Override
         public void open() {
-            isTrue("open", wrapped != null);
+            isTrue("open", !isClosed.get());
             wrapped.open();
         }
 
         @Override
         public void openAsync(final SingleResultCallback<Void> callback) {
-            isTrue("open", wrapped != null);
+            isTrue("open", !isClosed.get());
             wrapped.openAsync(callback);
         }
 
         @Override
         public void close() {
-            if (wrapped != null) {
-                if (!closed) {
+            // All but the first call is a no-op
+            if (!isClosed.getAndSet(true)) {
+                if (!DefaultConnectionPool.this.closed) {
                     connectionPoolListener.connectionCheckedIn(new ConnectionCheckedInEvent(getId(wrapped)));
                     if (LOGGER.isTraceEnabled()) {
                         LOGGER.trace(format("Checked in connection [%s] to server %s", getId(wrapped), serverId.getAddress()));
                     }
                 }
                 pool.release(wrapped, wrapped.isClosed() || shouldPrune(wrapped));
-                wrapped = null;
             }
         }
 
         @Override
         public boolean opened() {
-            isTrue("open", wrapped != null);
+            isTrue("open", !isClosed.get());
             return wrapped.opened();
         }
 
         @Override
         public boolean isClosed() {
-            return wrapped == null || wrapped.isClosed();
+            return isClosed.get() || wrapped.isClosed();
         }
 
         @Override
@@ -422,7 +423,7 @@ class DefaultConnectionPool implements ConnectionPool {
 
         @Override
         public void sendMessage(final List<ByteBuf> byteBuffers, final int lastRequestId) {
-            isTrue("open", wrapped != null);
+            isTrue("open", !isClosed.get());
             try {
                 wrapped.sendMessage(byteBuffers, lastRequestId);
             } catch (MongoException e) {
@@ -432,8 +433,34 @@ class DefaultConnectionPool implements ConnectionPool {
         }
 
         @Override
+        public <T> T sendAndReceive(final CommandMessage message, final Decoder<T> decoder, final SessionContext sessionContext) {
+            isTrue("open", !isClosed.get());
+            try {
+                return wrapped.sendAndReceive(message, decoder, sessionContext);
+            } catch (MongoException e) {
+                incrementGenerationOnSocketException(this, e);
+                throw e;
+            }
+        }
+
+        @Override
+        public <T> void sendAndReceiveAsync(final CommandMessage message, final Decoder<T> decoder,
+                                            final SessionContext sessionContext, final SingleResultCallback<T> callback) {
+            isTrue("open", !isClosed.get());
+            wrapped.sendAndReceiveAsync(message, decoder, sessionContext, new SingleResultCallback<T>() {
+                @Override
+                public void onResult(final T result, final Throwable t) {
+                    if (t != null) {
+                        incrementGenerationOnSocketException(PooledConnection.this, t);
+                    }
+                    callback.onResult(result, t);
+                }
+            });
+        }
+
+        @Override
         public ResponseBuffers receiveMessage(final int responseTo) {
-            isTrue("open", wrapped != null);
+            isTrue("open", !isClosed.get());
             try {
                 return wrapped.receiveMessage(responseTo);
             } catch (MongoException e) {
@@ -444,7 +471,7 @@ class DefaultConnectionPool implements ConnectionPool {
 
         @Override
         public void sendMessageAsync(final List<ByteBuf> byteBuffers, final int lastRequestId, final SingleResultCallback<Void> callback) {
-            isTrue("open", wrapped != null);
+            isTrue("open", !isClosed.get());
             wrapped.sendMessageAsync(byteBuffers, lastRequestId, new SingleResultCallback<Void>() {
                 @Override
                 public void onResult(final Void result, final Throwable t) {
@@ -458,7 +485,7 @@ class DefaultConnectionPool implements ConnectionPool {
 
         @Override
         public void receiveMessageAsync(final int responseTo, final SingleResultCallback<ResponseBuffers> callback) {
-            isTrue("open", wrapped != null);
+            isTrue("open", !isClosed.get());
             wrapped.receiveMessageAsync(responseTo, new SingleResultCallback<ResponseBuffers>() {
                 @Override
                 public void onResult(final ResponseBuffers result, final Throwable t) {
@@ -472,7 +499,7 @@ class DefaultConnectionPool implements ConnectionPool {
 
         @Override
         public ConnectionDescription getDescription() {
-            isTrue("open", wrapped != null);
+            isTrue("open", !isClosed.get());
             return wrapped.getDescription();
         }
     }
@@ -480,7 +507,7 @@ class DefaultConnectionPool implements ConnectionPool {
     private class UsageTrackingInternalConnectionItemFactory implements ConcurrentPool.ItemFactory<UsageTrackingInternalConnection> {
         private final InternalConnectionFactory internalConnectionFactory;
 
-        public UsageTrackingInternalConnectionItemFactory(final InternalConnectionFactory internalConnectionFactory) {
+        UsageTrackingInternalConnectionItemFactory(final InternalConnectionFactory internalConnectionFactory) {
             this.internalConnectionFactory = internalConnectionFactory;
         }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2015 MongoDB, Inc.
+ * Copyright (c) 2008-2017 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,17 +17,21 @@
 package com.mongodb.operation;
 
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoException;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ReadPreference;
 import com.mongodb.ServerAddress;
 import com.mongodb.ServerCursor;
 import com.mongodb.binding.ConnectionSource;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.QueryResult;
 import com.mongodb.internal.validator.NoOpFieldNameValidator;
+import org.bson.BsonArray;
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
 import org.bson.BsonInt64;
 import org.bson.BsonString;
+import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.Decoder;
 
 import java.util.List;
@@ -141,18 +145,16 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
 
     @Override
     public void close() {
-        if (closed) {
-            return;
-        }
-        try {
-            killCursor();
-        } finally {
-            if (connectionSource != null) {
-                connectionSource.release();
+        if (!closed) {
+            closed = true;
+            try {
+                killCursor();
+            } finally {
+                if (connectionSource != null) {
+                    connectionSource.release();
+                }
             }
         }
-
-        closed = true;
     }
 
     @Override
@@ -208,16 +210,16 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
                 try {
                     initFromCommandResult(connection.command(namespace.getDatabaseName(),
                                                              asGetMoreCommandDocument(),
-                                                             false,
+                                                             ReadPreference.primary(),
                                                              new NoOpFieldNameValidator(),
-                                                             CommandResultDocumentCodec.create(decoder, "nextBatch")));
+                                                             CommandResultDocumentCodec.create(decoder, "nextBatch"),
+                                                             connectionSource.getSessionContext()));
                 } catch (MongoCommandException e) {
                     throw translateCommandException(e, serverCursor);
                 }
             } else {
                 initFromQueryResult(connection.getMore(namespace, serverCursor.getId(),
-                                                       getNumberToReturn(limit, batchSize, count),
-                                                       decoder));
+                        getNumberToReturn(limit, batchSize, count), decoder));
             }
             if (limitReached()) {
                 killCursor(connection);
@@ -263,6 +265,8 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
             Connection connection = connectionSource.getConnection();
             try {
                 killCursor(connection);
+            } catch (MongoException e) {
+                // Ignore exceptions from calling killCursor
             } finally {
                 connection.release();
             }
@@ -272,8 +276,18 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
     private void killCursor(final Connection connection) {
         if (serverCursor != null) {
             notNull("connection", connection);
-            connection.killCursor(namespace, singletonList(serverCursor.getId()));
+            if (serverIsAtLeastVersionThreeDotTwo(connection.getDescription())) {
+                connection.command(namespace.getDatabaseName(), asKillCursorsCommandDocument(), ReadPreference.primary(),
+                        new NoOpFieldNameValidator(), new BsonDocumentCodec(), connectionSource.getSessionContext());
+            } else {
+                connection.killCursor(namespace, singletonList(serverCursor.getId()));
+            }
             serverCursor = null;
         }
+    }
+
+    private BsonDocument asKillCursorsCommandDocument() {
+        return new BsonDocument("killCursors", new BsonString(namespace.getCollectionName()))
+                       .append("cursors", new BsonArray(singletonList(new BsonInt64(serverCursor.getId()))));
     }
 }

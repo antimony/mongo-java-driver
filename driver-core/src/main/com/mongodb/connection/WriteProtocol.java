@@ -18,13 +18,14 @@ package com.mongodb.connection;
 
 import com.mongodb.MongoInternalException;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ReadPreference;
 import com.mongodb.WriteConcern;
 import com.mongodb.WriteConcernException;
 import com.mongodb.WriteConcernResult;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.diagnostics.logging.Logger;
 import com.mongodb.event.CommandListener;
-import org.bson.BsonArray;
+import com.mongodb.internal.connection.NoOpSessionContext;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
@@ -34,34 +35,26 @@ import org.bson.codecs.Decoder;
 import org.bson.io.OutputBuffer;
 
 import static com.mongodb.MongoNamespace.COMMAND_COLLECTION_NAME;
-import static com.mongodb.connection.ProtocolHelper.encodeMessage;
+import static com.mongodb.assertions.Assertions.isTrue;
 import static com.mongodb.connection.ProtocolHelper.encodeMessageWithMetadata;
 import static com.mongodb.connection.ProtocolHelper.getMessageSettings;
 import static com.mongodb.connection.ProtocolHelper.getWriteResult;
 import static com.mongodb.connection.ProtocolHelper.sendCommandFailedEvent;
 import static com.mongodb.connection.ProtocolHelper.sendCommandStartedEvent;
 import static com.mongodb.connection.ProtocolHelper.sendCommandSucceededEvent;
-import static java.util.Collections.singletonList;
 
 /**
- * Base class for wire protocol messages that perform writes.  In particular, it handles the write followed by the getlasterror command to
- * apply the write concern.
+ * Base class for legacy wire protocol messages that perform unacknowledged writes.
  */
-abstract class WriteProtocol implements Protocol<WriteConcernResult> {
+abstract class WriteProtocol implements LegacyProtocol<WriteConcernResult> {
 
     private final MongoNamespace namespace;
     private final boolean ordered;
     private final WriteConcern writeConcern;
     private CommandListener commandListener;
 
-    /**
-     * Construct a new instance.
-     *
-     * @param namespace    the namespace
-     * @param ordered      whether the inserts are ordered
-     * @param writeConcern the write concern
-     */
-    public WriteProtocol(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern) {
+    WriteProtocol(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern) {
+        isTrue("write concern is unacknowledged", !writeConcern.isAcknowledged());
         this.namespace = namespace;
         this.ordered = ordered;
         this.writeConcern = writeConcern;
@@ -74,7 +67,6 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
 
     @Override
     public WriteConcernResult execute(final InternalConnection connection) {
-        WriteConcernResult writeConcernResult = null;
         RequestMessage requestMessage = null;
         do {
             long startTimeNanos = System.nanoTime();
@@ -86,18 +78,18 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
                 if (requestMessage == null) {
                     requestMessage = createRequestMessage(getMessageSettings(connection.getDescription()));
                 }
-                encodingMetadata = requestMessage.encodeWithMetadata(bsonOutput);
-
-                sendStartedEvent(connection, requestMessage, encodingMetadata, bsonOutput);
+                requestMessage.encode(bsonOutput, NoOpSessionContext.INSTANCE);
+                encodingMetadata = requestMessage.getEncodingMetadata();
+                sendStartedEvent(connection, requestMessage, requestMessage.getEncodingMetadata(), bsonOutput);
                 sentCommandStartedEvent = true;
 
                 messageId = requestMessage.getId();
-                if (shouldAcknowledge(encodingMetadata.getNextMessage())) {
-                    CommandMessage getLastErrorMessage = new CommandMessage(new MongoNamespace(getNamespace().getDatabaseName(),
+                if (shouldAcknowledge(requestMessage.getEncodingMetadata().getNextMessage())) {
+                    SimpleCommandMessage getLastErrorMessage = new SimpleCommandMessage(new MongoNamespace(getNamespace().getDatabaseName(),
                             COMMAND_COLLECTION_NAME).getFullName(),
-                            createGetLastErrorCommandDocument(), false,
+                            createGetLastErrorCommandDocument(), ReadPreference.primary(),
                             getMessageSettings(connection.getDescription()));
-                    getLastErrorMessage.encode(bsonOutput);
+                    getLastErrorMessage.encode(bsonOutput, NoOpSessionContext.INSTANCE);
                     messageId = getLastErrorMessage.getId();
                 }
 
@@ -115,17 +107,14 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
                     responseBuffers = connection.receiveMessage(messageId);
                     ReplyMessage<BsonDocument> replyMessage = new ReplyMessage<BsonDocument>(responseBuffers, new BsonDocumentCodec(),
                             messageId);
-                    writeConcernResult = getWriteResult(replyMessage.getDocuments().get(0),
-                            connection.getDescription().getServerAddress());
+                    getWriteResult(replyMessage.getDocuments().get(0), connection.getDescription().getServerAddress());
                 } catch (WriteConcernException e) {
-                    sendSucceededEvent(connection, requestMessage, encodingMetadata.getNextMessage(), e, startTimeNanos);
-                    if (writeConcern.isAcknowledged()) {
-                        throw e;
-                    } else if (ordered) {
+                    sendSucceededEvent(connection, requestMessage, startTimeNanos);
+                    if (ordered) {
                         break;
                     }
                 } catch (RuntimeException e) {
-                    sendFailedEvent(connection, requestMessage, sentCommandStartedEvent, e, startTimeNanos);
+                    sendFailedEvent(connection, requestMessage, true, e, startTimeNanos);
                     throw e;
                 } finally {
                     if (responseBuffers != null) {
@@ -134,16 +123,13 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
                 }
             }
 
-            sendSucceededEvent(connection, requestMessage, encodingMetadata.getNextMessage(), writeConcernResult, startTimeNanos);
+            sendSucceededEvent(connection, requestMessage, startTimeNanos);
 
             requestMessage = encodingMetadata.getNextMessage();
         } while (requestMessage != null);
 
-        return writeConcern.isAcknowledged() ? writeConcernResult : WriteConcernResult.unacknowledged();
+        return WriteConcernResult.unacknowledged();
     }
-
-    protected abstract void appendToWriteCommandResponseDocument(final RequestMessage curMessage, final RequestMessage nextMessage,
-                                                                 final WriteConcernResult writeConcernResult, final BsonDocument response);
 
     @Override
     public void executeAsync(final InternalConnection connection, final SingleResultCallback<WriteConcernResult> callback) {
@@ -162,11 +148,11 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
             sentCommandStartedEvent = true;
 
             if (shouldAcknowledge(encodingMetadata.getNextMessage())) {
-                CommandMessage getLastErrorMessage = new CommandMessage(new MongoNamespace(getNamespace().getDatabaseName(),
+                SimpleCommandMessage getLastErrorMessage = new SimpleCommandMessage(new MongoNamespace(getNamespace().getDatabaseName(),
                         COMMAND_COLLECTION_NAME).getFullName(),
-                        createGetLastErrorCommandDocument(), false,
+                        createGetLastErrorCommandDocument(), ReadPreference.primary(),
                         getMessageSettings(connection.getDescription()));
-                encodeMessage(getLastErrorMessage, bsonOutput);
+                getLastErrorMessage.encode(bsonOutput, NoOpSessionContext.INSTANCE);
                 SingleResultCallback<ResponseBuffers> receiveCallback = new WriteResultCallback(callback,
                         new BsonDocumentCodec(),
                         requestMessage,
@@ -233,22 +219,9 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
     }
 
     private void sendSucceededEvent(final InternalConnection connection, final RequestMessage message,
-                                    final RequestMessage nextMessage,
-                                    final WriteConcernException e,
                                     final long startTimeNanos) {
         if (commandListener != null) {
-            sendSucceededEvent(connection, message,
-                    getResponseDocument(message, nextMessage, e.getWriteConcernResult(), e), startTimeNanos);
-        }
-    }
-
-    private void sendSucceededEvent(final InternalConnection connection, final RequestMessage message,
-                                    final RequestMessage nextMessage,
-                                    final WriteConcernResult writeConcernResult,
-                                    final long startTimeNanos) {
-        if (commandListener != null) {
-            sendSucceededEvent(connection, message,
-                    getResponseDocument(message, nextMessage, writeConcernResult, null), startTimeNanos);
+            sendSucceededEvent(connection, message, getResponseDocument(), startTimeNanos);
         }
     }
 
@@ -267,34 +240,16 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
         }
     }
 
-    private BsonDocument getResponseDocument(final RequestMessage curMessage, final RequestMessage nextMessage,
-                                             final WriteConcernResult writeConcernResult,
-                                             final WriteConcernException writeConcernException) {
-        BsonDocument response = new BsonDocument("ok", new BsonInt32(1));
-        if (writeConcern.isAcknowledged()) {
-            if (writeConcernException == null) {
-                appendToWriteCommandResponseDocument(curMessage, nextMessage, writeConcernResult, response);
-            } else {
-                response.put("n", new BsonInt32(0));
-                BsonDocument writeErrorDocument = new BsonDocument("index", new BsonInt32(0))
-                        .append("code", new BsonInt32(writeConcernException.getErrorCode()));
-                if (writeConcernException.getErrorMessage() != null) {
-                    writeErrorDocument.append("errmsg", new BsonString(writeConcernException.getErrorMessage()));
-                }
-                response.put("writeErrors", new BsonArray(singletonList(writeErrorDocument)));
-            }
-        }
-        return response;
+    private BsonDocument getResponseDocument() {
+        return new BsonDocument("ok", new BsonInt32(1));
     }
 
     private boolean shouldAcknowledge(final RequestMessage nextMessage) {
-        return writeConcern.isAcknowledged() || (isOrdered() && nextMessage != null);
+        return isOrdered() && nextMessage != null;
     }
 
     private BsonDocument createGetLastErrorCommandDocument() {
-        BsonDocument command = new BsonDocument("getlasterror", new BsonInt32(1));
-        command.putAll(writeConcern.asDocument());
-        return command;
+        return new BsonDocument("getlasterror", new BsonInt32(1));
     }
 
     /**
@@ -346,9 +301,9 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
         private final InternalConnection connection;
         private final long startTimeNanos;
 
-        public WriteResultCallback(final SingleResultCallback<WriteConcernResult> callback, final Decoder<BsonDocument> decoder,
-                                   final RequestMessage message, final RequestMessage nextMessage,
-                                   final long requestId, final InternalConnection connection, final long startTimeNanos) {
+        WriteResultCallback(final SingleResultCallback<WriteConcernResult> callback, final Decoder<BsonDocument> decoder,
+                            final RequestMessage message, final RequestMessage nextMessage, final long requestId,
+                            final InternalConnection connection, final long startTimeNanos) {
             super(decoder, requestId, connection.getDescription().getServerAddress());
             this.callback = callback;
             this.message = message;
@@ -370,15 +325,12 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
                         try {
                             writeConcernResult = getWriteResult(result, connection.getDescription().getServerAddress());
                         } catch (WriteConcernException e) {
-                            if (writeConcern.isAcknowledged()) {
-                                throw e;
-                            }
                             if (ordered) {
                                 shouldWriteNextMessage = false;
                             }
                         }
 
-                        sendSucceededEvent(connection, message, nextMessage, writeConcernResult, startTimeNanos);
+                        sendSucceededEvent(connection, message, startTimeNanos);
 
                         if (shouldWriteNextMessage && nextMessage != null) {
                             executeAsync(nextMessage, connection, callback);
@@ -386,7 +338,7 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
                             callback.onResult(writeConcernResult, null);
                         }
                     } catch (WriteConcernException e) {
-                        sendSucceededEvent(connection, message, nextMessage, e, startTimeNanos);
+                        sendSucceededEvent(connection, message, startTimeNanos);
                         throw e;
                     } catch (RuntimeException e) {
                         sendFailedEvent(connection, message, true, e, startTimeNanos);
@@ -427,7 +379,7 @@ abstract class WriteProtocol implements Protocol<WriteConcernResult> {
                 sendFailedEvent(connection, message, true, t, startTimeNanos);
                 callback.onResult(null, t);
             } else {
-                sendSucceededEvent(connection, message, nextMessage, (WriteConcernResult) null, startTimeNanos);
+                sendSucceededEvent(connection, message, startTimeNanos);
 
                 if (nextMessage != null) {
                     executeAsync(nextMessage, connection, callback);

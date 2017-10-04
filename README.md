@@ -4,7 +4,7 @@ Release notes are available [here](https://github.com/mongodb/mongo-java-driver/
 
 ## API Documentation:
 
-Javadoc for all major and minor releases is available [here](http://api.mongodb.org/java/).
+Javadoc for all major and minor releases is available [here](http://api.mongodb.com/java/).
 
 ## Support / Feedback
 
@@ -31,8 +31,7 @@ case in our issue management tool, JIRA:
 Bug reports in JIRA for the driver and the Core Server (i.e. SERVER) project are **public**.
 
 If you’ve identified a security vulnerability in a driver or any other
-MongoDB project, please report it according to the [instructions here]
-(http://docs.mongodb.org/manual/tutorial/create-a-vulnerability-report).
+MongoDB project, please report it according to the [instructions here](http://docs.mongodb.org/manual/tutorial/create-a-vulnerability-report).
 
 ## Versioning
 
@@ -114,12 +113,18 @@ $ cd mongo-java-driver
 $ ./gradlew check
 ```
 
-The test suite requires mongod to be running with [`enableTestCommands`](http://docs.mongodb.org/manual/reference/parameters/#param.enableTestCommands).
+The test suite requires mongod to be running with [`enableTestCommands`](http://docs.mongodb.org/manual/reference/parameters/#param.enableTestCommands), which may be set with the `--setParameter enableTestCommands=1`
+command-line parameter:
+```
+$ mongod --dbpath ./data/db --logpath ./data/mongod.log --port 27017 --logappend --fork --setParameter enableTestCommands=1
+```
 
+If you encounter `"Too many open files"` errors when running the tests then you will need to increase 
+the number of available file descriptors prior to starting mongod as described in [https://docs.mongodb.com/manual/reference/ulimit/](https://docs.mongodb.com/manual/reference/ulimit/)
 
 ### Build status:
 
-[![Build Status](https://travis-ci.org/mongodb/mongo-java-driver.svg?branch=master)](https://travis-ci.org/mongodb/mongo-java-driver) | [![Build Status](https://jenkins.10gen.com/job/mongo-java-driver-3.x/badge/icon)](https://jenkins.10gen.com/job/mongo-java-driver/)
+[![Build Status](https://travis-ci.org/mongodb/mongo-java-driver.svg?branch=master)](https://travis-ci.org/mongodb/mongo-java-driver)
 
 ## Maintainers
 
@@ -140,6 +145,5 @@ YourKit is supporting this open source project with its [YourKit Java Profiler](
 
 JetBrains is supporting this open source project with:
 
-[![Intellij IDEA](http://www.jetbrains.com/img/logos/logo_intellij_idea.png)]
-(http://www.jetbrains.com/idea/)
+[![Intellij IDEA](http://www.jetbrains.com/img/logos/logo_intellij_idea.png)](http://www.jetbrains.com/idea/)
 

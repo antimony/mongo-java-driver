@@ -16,7 +16,6 @@
 
 package com.mongodb;
 
-import com.mongodb.util.JSON;
 import org.bson.BasicBSONObject;
 import org.bson.json.JsonMode;
 import org.bson.json.JsonWriterSettings;
@@ -56,13 +55,14 @@ public class BasicDBObjectTest {
 
         assertEquals("{ \"_id\" : { \"$oid\" : \"5522d5d12cf8fb556a991f45\" }, \"int\" : 1, \"string\" : \"abc\" }", doc.toJson());
         assertEquals("{ \"_id\" : ObjectId(\"5522d5d12cf8fb556a991f45\"), \"int\" : 1, \"string\" : \"abc\" }",
-                     doc.toJson(new JsonWriterSettings(JsonMode.SHELL)));
+                     doc.toJson(JsonWriterSettings.builder().outputMode(JsonMode.SHELL).build()));
 
         assertEquals("{ \"_id\" : { \"$oid\" : \"5522d5d12cf8fb556a991f45\" }, \"int\" : 1, \"string\" : \"abc\" }",
                      doc.toJson(getDefaultCodecRegistry().get(BasicDBObject.class)));
 
         assertEquals("{ \"_id\" : ObjectId(\"5522d5d12cf8fb556a991f45\"), \"int\" : 1, \"string\" : \"abc\" }",
-                     doc.toJson(new JsonWriterSettings(JsonMode.SHELL), getDefaultCodecRegistry().get(BasicDBObject.class)));
+                     doc.toJson(JsonWriterSettings.builder().outputMode(JsonMode.SHELL).build(),
+                             getDefaultCodecRegistry().get(BasicDBObject.class)));
     }
 
     @Test
@@ -127,15 +127,17 @@ public class BasicDBObjectTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void testBuilderNested() {
         BasicDBObjectBuilder b = BasicDBObjectBuilder.start();
         b.add("a", 1);
         b.push("b").append("c", 2).pop();
         DBObject a = b.get();
-        assertEquals(a, JSON.parse("{ 'a' : 1, 'b' : { 'c' : 2 } }"));
+        assertEquals(a, com.mongodb.util.JSON.parse("{ 'a' : 1, 'b' : { 'c' : 2 } }"));
     }
 
     @Test
+    @SuppressWarnings("deprecation")
     public void testDown1() {
         BasicDBObjectBuilder b = BasicDBObjectBuilder.start();
         b.append("x", 1);
@@ -145,7 +147,7 @@ public class BasicDBObjectTest {
         b.push("z");
         b.append("b", 3);
 
-        assertEquals(b.get(), JSON.parse("{ 'x' : 1 , 'y' : { 'a' : 2 } , 'z' : { 'b' : 3 } }"));
+        assertEquals(b.get(), com.mongodb.util.JSON.parse("{ 'x' : 1 , 'y' : { 'a' : 2 } , 'z' : { 'b' : 3 } }"));
     }
 
     @Test

@@ -23,14 +23,12 @@ import com.mongodb.MongoSocketWriteException
 import com.mongodb.ServerAddress
 import com.mongodb.bulk.DeleteRequest
 import com.mongodb.event.CommandFailedEvent
-import com.mongodb.internal.validator.NoOpFieldNameValidator
 import org.bson.BsonDocument
 import org.bson.BsonInt32
 import org.bson.codecs.DocumentCodec
 import spock.lang.Shared
 import spock.lang.Specification
 
-import static com.mongodb.WriteConcern.ACKNOWLEDGED
 import static com.mongodb.WriteConcern.UNACKNOWLEDGED
 import static com.mongodb.connection.ProtocolTestHelper.execute
 
@@ -46,7 +44,7 @@ class CommandEventOnConnectionFailureSpecification extends Specification {
 
     def 'should publish failed command event when sendMessage throws exception'() {
         String commandName = protocolInfo[0]
-        Protocol protocol = protocolInfo[1]
+        LegacyProtocol protocol = protocolInfo[1]
 
         def commandListener = new TestCommandListener()
         protocol.commandListener = commandListener
@@ -61,21 +59,13 @@ class CommandEventOnConnectionFailureSpecification extends Specification {
         commandListener.eventWasDelivered(new CommandFailedEvent(1, connection.getDescription(), commandName, 0, e), 1)
 
         where:
-        [protocolInfo, async] << [[['ping',
-                                    new CommandProtocol('admin', new BsonDocument('ping', new BsonInt32(1)),
-                                            new NoOpFieldNameValidator(), new DocumentCodec())],
+        [protocolInfo, async] << [[
                                    ['killCursors',
                                     new KillCursorProtocol(namespace, [42L])],
                                    ['getMore',
                                     new GetMoreProtocol(namespace, 42L, 1, new DocumentCodec())],
                                    ['find',
                                     new QueryProtocol(namespace, 0, 1, 1, new BsonDocument(), new BsonDocument(), new DocumentCodec())],
-                                   ['delete',
-                                    new DeleteCommandProtocol(namespace, true, ACKNOWLEDGED,
-                                            [new DeleteRequest(new BsonDocument('_id', new BsonInt32(1)))])],
-                                   ['delete',
-                                    new DeleteProtocol(namespace, true, ACKNOWLEDGED,
-                                            [new DeleteRequest(new BsonDocument('_id', new BsonInt32(1)))])],
                                    ['delete',
                                     new DeleteProtocol(namespace, true, UNACKNOWLEDGED,
                                             [new DeleteRequest(new BsonDocument('_id', new BsonInt32(1)))])],
@@ -85,7 +75,7 @@ class CommandEventOnConnectionFailureSpecification extends Specification {
 
     def 'should publish failed command event when receiveMessage throws exception'() {
         String commandName = protocolInfo[0]
-        Protocol protocol = protocolInfo[1]
+        LegacyProtocol protocol = protocolInfo[1]
 
         def commandListener = new TestCommandListener()
         protocol.commandListener = commandListener
@@ -100,19 +90,11 @@ class CommandEventOnConnectionFailureSpecification extends Specification {
         commandListener.eventWasDelivered(new CommandFailedEvent(1, connection.getDescription(), commandName, 0, e), 1)
 
         where:
-        [protocolInfo, async] << [[['ping',
-                                    new CommandProtocol('admin', new BsonDocument('ping', new BsonInt32(1)),
-                                            new NoOpFieldNameValidator(), new DocumentCodec())],
+        [protocolInfo, async] << [[
                                    ['getMore',
                                     new GetMoreProtocol(namespace, 42L, 1, new DocumentCodec())],
                                    ['find',
                                     new QueryProtocol(namespace, 0, 1, 1, new BsonDocument(), new BsonDocument(), new DocumentCodec())],
-                                   ['delete',
-                                    new DeleteCommandProtocol(namespace, true, ACKNOWLEDGED,
-                                            [new DeleteRequest(new BsonDocument('_id', new BsonInt32(1)))])],
-                                   ['delete',
-                                    new DeleteProtocol(namespace, true, ACKNOWLEDGED,
-                                            [new DeleteRequest(new BsonDocument('_id', new BsonInt32(1)))])],
                                   ],
                                   [false, true]].combinations()
     }

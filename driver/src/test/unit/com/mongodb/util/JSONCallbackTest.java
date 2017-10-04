@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import org.bson.BsonUndefined;
 import org.bson.Transformer;
 import org.bson.types.BSONTimestamp;
 import org.bson.types.Binary;
+import org.bson.types.Decimal128;
 import org.bson.types.ObjectId;
 import org.junit.Test;
 
@@ -36,6 +37,7 @@ import java.util.regex.Pattern;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 
+@SuppressWarnings("deprecation")
 public class JSONCallbackTest {
 
     @Test
@@ -90,6 +92,10 @@ public class JSONCallbackTest {
         Binary parsedBinary = (Binary) JSON.parse(("{ \"$binary\" : \"YWJjZA==\", \"$type\" : 0 }"));
         assertEquals(0, parsedBinary.getType());
         assertArrayEquals(new byte[]{97, 98, 99, 100}, parsedBinary.getData());
+
+        Binary parsedBinaryWithHexType = (Binary) JSON.parse(("{ \"$binary\" : \"YWJjZA==\", \"$type\" : \"80\" }"));
+        assertEquals((byte) 128, parsedBinaryWithHexType.getType());
+        assertArrayEquals(new byte[]{97, 98, 99, 100}, parsedBinaryWithHexType.getData());
     }
 
     @Test
@@ -133,4 +139,9 @@ public class JSONCallbackTest {
 
     }
 
+    @Test
+    public void numberDecimalParsing() {
+        Decimal128 number = (Decimal128) JSON.parse(("{\"$numberDecimal\" : \"314E-2\"}"));
+        assertEquals(number, Decimal128.parse("314E-2"));
+    }
 }

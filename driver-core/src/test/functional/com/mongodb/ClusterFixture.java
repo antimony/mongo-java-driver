@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,14 +42,17 @@ import com.mongodb.connection.SocketStreamFactory;
 import com.mongodb.connection.SslSettings;
 import com.mongodb.connection.StreamFactory;
 import com.mongodb.connection.netty.NettyStreamFactory;
-import com.mongodb.management.JMXConnectionPoolListener;
 import com.mongodb.operation.AsyncReadOperation;
 import com.mongodb.operation.AsyncWriteOperation;
+import com.mongodb.operation.BatchCursor;
 import com.mongodb.operation.CommandWriteOperation;
 import com.mongodb.operation.DropDatabaseOperation;
+import com.mongodb.operation.ReadOperation;
+import com.mongodb.operation.WriteOperation;
+import com.mongodb.selector.ServerSelector;
 import org.bson.BsonDocument;
-import org.bson.BsonDocumentWrapper;
 import org.bson.BsonInt32;
+import org.bson.BsonString;
 import org.bson.Document;
 import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.DocumentCodec;
@@ -67,6 +70,7 @@ import static java.util.Arrays.asList;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assume.assumeThat;
+import static org.junit.Assume.assumeTrue;
 
 /**
  * Helper class for the acceptance tests.  Used primarily by DatabaseTestCase and FunctionalSpecification.  This fixture allows Test
@@ -76,6 +80,7 @@ public final class ClusterFixture {
     public static final String DEFAULT_URI = "mongodb://localhost:27017";
     public static final String MONGODB_URI_SYSTEM_PROPERTY_NAME = "org.mongodb.test.uri";
     private static final String DEFAULT_DATABASE_NAME = "JavaDriverTest";
+    private static final int COMMAND_NOT_FOUND_ERROR_CODE = 59;
     public static final long TIMEOUT = 60L;
 
     private static ConnectionString connectionString;
@@ -102,11 +107,40 @@ public final class ClusterFixture {
     }
 
     public static ServerVersion getServerVersion() {
-        return getCluster().getDescription().getAny().get(0).getVersion();
+        return getCluster().selectServer(new ServerSelector() {
+            @Override
+            @SuppressWarnings("deprecation")
+            public List<ServerDescription> select(final ClusterDescription clusterDescription) {
+                return clusterDescription.getAny();
+            }
+        }).getDescription().getVersion();
     }
 
     public static boolean serverVersionAtLeast(final List<Integer> versionArray) {
-        return getConnectedServerVersion().compareTo(new ServerVersion(versionArray)) >= 0;
+        return getServerVersion().compareTo(new ServerVersion(versionArray)) >= 0;
+    }
+
+    public static boolean serverVersionAtLeast(final int majorVersion, final int minorVersion) {
+        return serverVersionAtLeast(asList(majorVersion, minorVersion, 0));
+    }
+
+    public static boolean serverVersionLessThan(final String versionString) {
+        return getServerVersion().compareTo(new ServerVersion(getVersionList(versionString).subList(0, 3))) < 0;
+    }
+
+    public static boolean serverVersionGreaterThan(final String versionString) {
+        return getServerVersion().compareTo(new ServerVersion(getVersionList(versionString).subList(0, 3))) > 0;
+    }
+
+    private static List<Integer> getVersionList(final String versionString) {
+        List<Integer> versionList = new ArrayList<Integer>();
+        for (String s : versionString.split("\\.")) {
+            versionList.add(Integer.valueOf(s));
+        }
+        while (versionList.size() < 3) {
+            versionList.add(0);
+        }
+        return versionList;
     }
 
     public static Document getBuildInfo() {
@@ -137,29 +171,23 @@ public final class ClusterFixture {
         return storageEngine != null && !storageEngine.get("name").equals("inMemory");
     }
 
-    private static ServerVersion getConnectedServerVersion() {
-        ClusterDescription clusterDescription = getCluster().getDescription();
-        int retries = 0;
-        while (clusterDescription.getAny().isEmpty() && retries <= 3) {
-            try {
-                Thread.sleep(1000);
-                retries++;
-            } catch (InterruptedException e) {
-                throw new RuntimeException("Interrupted", e);
-            }
-            clusterDescription = getCluster().getDescription();
-        }
-        if (clusterDescription.getAny().isEmpty()) {
-            throw new RuntimeException("There are no servers available in " + clusterDescription);
-        }
-        return clusterDescription.getAny().get(0).getVersion();
+    public static boolean isNotAtLeastJava7() {
+        return javaVersionStartsWith("1.6");
+    }
+
+    public static boolean isNotAtLeastJava8() {
+        return isNotAtLeastJava7() || javaVersionStartsWith("1.7");
+    }
+
+    private static boolean javaVersionStartsWith(final String versionPrefix) {
+        return System.getProperty("java.version").startsWith(versionPrefix + ".");
     }
 
     static class ShutdownHook extends Thread {
         @Override
         public void run() {
             if (cluster != null) {
-                new DropDatabaseOperation(getDefaultDatabaseName()).execute(getBinding());
+                new DropDatabaseOperation(getDefaultDatabaseName(), WriteConcern.ACKNOWLEDGED).execute(getBinding());
                 cluster.close();
             }
         }
@@ -228,13 +256,13 @@ public final class ClusterFixture {
     }
 
     public static Cluster createCluster(final StreamFactory streamFactory) {
-        return new DefaultClusterFactory().create(ClusterSettings.builder().applyConnectionString(getConnectionString()).build(),
+        return new DefaultClusterFactory().createCluster(ClusterSettings.builder().applyConnectionString(getConnectionString()).build(),
                                                   ServerSettings.builder().build(),
                                                   ConnectionPoolSettings.builder().applyConnectionString(getConnectionString()).build(),
                                                   streamFactory,
                                                   new SocketStreamFactory(SocketSettings.builder().build(), getSslSettings()),
-                                                  getConnectionString().getCredentialList(), null, new JMXConnectionPoolListener(), null);
-
+                                                  getConnectionString().getCredentialList(), null, null, null,
+                                                  getConnectionString().getCompressorList());
     }
 
     public static StreamFactory getAsyncStreamFactory() {
@@ -261,6 +289,7 @@ public final class ClusterFixture {
         return builder.build();
     }
 
+    @SuppressWarnings("deprecation")
     public static ServerAddress getPrimary() throws InterruptedException {
         List<ServerDescription> serverDescriptions = getCluster().getDescription().getPrimaries();
         while (serverDescriptions.isEmpty()) {
@@ -293,25 +322,51 @@ public final class ClusterFixture {
 
     public static void enableMaxTimeFailPoint() {
         assumeThat(isSharded(), is(false));
-        new CommandWriteOperation<BsonDocument>("admin",
-                                                new BsonDocumentWrapper<Document>(new Document("configureFailPoint", "maxTimeAlwaysTimeOut")
-                                                                                  .append("mode", "alwaysOn"),
-                                                                                  new DocumentCodec()),
-                                                new BsonDocumentCodec())
-        .execute(getBinding());
+        boolean failsPointsSupported = true;
+        try {
+            new CommandWriteOperation<BsonDocument>("admin",
+                                                    new BsonDocument("configureFailPoint", new BsonString("maxTimeAlwaysTimeOut"))
+                                                                                      .append("mode", new BsonString("alwaysOn")),
+                                                    new BsonDocumentCodec())
+            .execute(getBinding());
+        } catch (MongoCommandException e) {
+            if (e.getErrorCode() == COMMAND_NOT_FOUND_ERROR_CODE) {
+                failsPointsSupported = false;
+            }
+        }
+        assumeTrue("configureFailPoint is not enabled", failsPointsSupported);
     }
 
     public static void disableMaxTimeFailPoint() {
         assumeThat(isSharded(), is(false));
-        if (serverVersionAtLeast(asList(2, 6, 0)) && !isSharded()) {
-            new CommandWriteOperation<BsonDocument>("admin",
-                                                    new BsonDocumentWrapper<Document>(new Document("configureFailPoint",
-                                                                                                   "maxTimeAlwaysTimeOut")
-                                                                                      .append("mode", "off"),
-                                                                                      new DocumentCodec()),
-                                                    new BsonDocumentCodec())
-            .execute(getBinding());
+        if (!isSharded()) {
+            try {
+                new CommandWriteOperation<BsonDocument>("admin",
+                                                               new BsonDocument("configureFailPoint",
+                                                                                       new BsonString("maxTimeAlwaysTimeOut"))
+                                                                       .append("mode", new BsonString("off")),
+                                                               new BsonDocumentCodec())
+                .execute(getBinding());
+            } catch (MongoCommandException e) {
+                // ignore
+            }
         }
+    }
+
+    public static <T> T executeSync(final WriteOperation<T> op) throws Throwable {
+        return executeSync(op, getBinding());
+    }
+
+    public static <T> T executeSync(final WriteOperation<T> op, final ReadWriteBinding binding) throws Throwable {
+        return op.execute(binding);
+    }
+
+    public static <T> T executeSync(final ReadOperation<T> op) throws Throwable {
+        return executeSync(op, getBinding());
+    }
+
+    public static <T> T executeSync(final ReadOperation<T> op, final ReadWriteBinding binding) throws Throwable {
+        return op.execute(binding);
     }
 
     public static <T> T executeAsync(final AsyncWriteOperation<T> op) throws Throwable {
@@ -373,6 +428,27 @@ public final class ClusterFixture {
                     }
             }
         });
+    }
+
+    public static <T> List<T> collectCursorResults(final AsyncBatchCursor<T> batchCursor) throws Throwable {
+        final List<T> results = new ArrayList<T>();
+        FutureResultCallback<Void> futureResultCallback = new FutureResultCallback<Void>();
+        loopCursor(batchCursor, new Block<T>() {
+            @Override
+            public void apply(final T t) {
+                results.add(t);
+            }
+        }, futureResultCallback);
+        futureResultCallback.get(TIMEOUT, SECONDS);
+        return results;
+    }
+
+    public static <T> List<T> collectCursorResults(final BatchCursor<T> batchCursor) throws Throwable {
+        List<T> results = new ArrayList<T>();
+        while (batchCursor.hasNext()) {
+            results.addAll(batchCursor.next());
+        }
+        return results;
     }
 
     public static AsyncConnectionSource getWriteConnectionSource(final AsyncReadWriteBinding binding) throws Throwable {

@@ -28,6 +28,8 @@ import java.io.IOException;
 import java.net.URISyntaxException;
 import java.util.Collection;
 
+import static com.mongodb.internal.event.EventListenerHelper.NO_OP_CLUSTER_LISTENER;
+import static com.mongodb.internal.event.EventListenerHelper.NO_OP_SERVER_LISTENER;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -42,9 +44,9 @@ public class ServerDiscoveryAndMonitoringTest extends AbstractServerDiscoveryAnd
         init(new ServerListenerFactory() {
             @Override
             public ServerListener create(final ServerAddress serverAddress) {
-                return new NoOpServerListener();
+                return NO_OP_SERVER_LISTENER;
             }
-        }, new NoOpClusterListener());
+        }, NO_OP_CLUSTER_LISTENER);
     }
 
     @Test
@@ -54,9 +56,15 @@ public class ServerDiscoveryAndMonitoringTest extends AbstractServerDiscoveryAnd
                 applyResponse(response.asArray());
             }
             BsonDocument outcome = phase.asDocument().getDocument("outcome");
-            assertTopologyType(outcome.getString("topologyType").getValue());
+            assertTopology(outcome);
             assertServers(outcome.getDocument("servers"));
         }
+    }
+
+    private void assertTopology(final BsonDocument outcome) {
+        assertTopologyType(outcome.getString("topologyType").getValue());
+        assertLogicalSessionTimeout(outcome.get("logicalSessionTimeoutMinutes"));
+        assertDriverCompatibility(outcome.get("compatible"));
     }
 
     @Parameterized.Parameters(name = "{0}")
@@ -65,7 +73,7 @@ public class ServerDiscoveryAndMonitoringTest extends AbstractServerDiscoveryAnd
     }
 
     private void assertServers(final BsonDocument servers) {
-        if (servers.size() != getCluster().getCurrentDescription().getAll().size()) {
+        if (servers.size() != getCluster().getCurrentDescription().getServerDescriptions().size()) {
             fail("Cluster description contains servers that are not part of the expected outcome");
         }
 
@@ -105,7 +113,7 @@ public class ServerDiscoveryAndMonitoringTest extends AbstractServerDiscoveryAnd
 
     private ServerDescription getServerDescription(final String serverName) {
         ServerDescription serverDescription  = null;
-        for (ServerDescription cur : getCluster().getCurrentDescription().getAll()) {
+        for (ServerDescription cur : getCluster().getCurrentDescription().getServerDescriptions()) {
             if (cur.getAddress().equals(new ServerAddress(serverName))) {
                 serverDescription = cur;
                 break;
@@ -114,10 +122,11 @@ public class ServerDiscoveryAndMonitoringTest extends AbstractServerDiscoveryAnd
         return serverDescription;
     }
 
+    @SuppressWarnings("deprecation")
     private void assertTopologyType(final String topologyType) {
         if (topologyType.equals("Single")) {
             assertEquals(SingleServerCluster.class, getCluster().getClass());
-            assertEquals(getClusterType(topologyType, getCluster().getCurrentDescription().getAll()),
+            assertEquals(getClusterType(topologyType, getCluster().getCurrentDescription().getServerDescriptions()),
                     getCluster().getCurrentDescription().getType());
         } else if (topologyType.equals("ReplicaSetWithPrimary")) {
             assertEquals(MultiServerCluster.class, getCluster().getClass());
@@ -134,6 +143,21 @@ public class ServerDiscoveryAndMonitoringTest extends AbstractServerDiscoveryAnd
             assertEquals(getClusterType(topologyType), getCluster().getCurrentDescription().getType());
         } else {
             throw new UnsupportedOperationException("No handler for topology type " + topologyType);
+        }
+    }
+
+    private void assertLogicalSessionTimeout(final BsonValue logicalSessionTimeoutMinutes) {
+        if (logicalSessionTimeoutMinutes.isNull()) {
+            assertNull(getCluster().getCurrentDescription().getLogicalSessionTimeoutMinutes());
+        } else if (logicalSessionTimeoutMinutes.isNumber()) {
+            assertEquals((Integer) logicalSessionTimeoutMinutes.asNumber().intValue(),
+                    getCluster().getCurrentDescription().getLogicalSessionTimeoutMinutes());
+        }
+    }
+
+    private void assertDriverCompatibility(final BsonValue compatible) {
+        if (compatible != null) {
+            assertEquals(compatible.asBoolean().getValue(), getCluster().getCurrentDescription().isCompatibleWithDriver());
         }
     }
 }

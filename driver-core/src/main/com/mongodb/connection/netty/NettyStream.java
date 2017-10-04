@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 package com.mongodb.connection.netty;
 
+import com.mongodb.MongoClientException;
 import com.mongodb.MongoException;
 import com.mongodb.MongoInternalException;
 import com.mongodb.MongoInterruptedException;
@@ -40,7 +41,6 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutException;
 import io.netty.util.concurrent.EventExecutor;
@@ -48,13 +48,16 @@ import org.bson.ByteBuf;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLParameters;
 import java.io.IOException;
+import java.security.NoSuchAlgorithmException;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
 import static com.mongodb.internal.connection.SslHelper.enableHostNameVerification;
+import static com.mongodb.internal.connection.SslHelper.enableSni;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
@@ -66,6 +69,7 @@ final class NettyStream implements Stream {
     private final SocketSettings settings;
     private final SslSettings sslSettings;
     private final EventLoopGroup workerGroup;
+    private final Class<? extends SocketChannel> socketChannelClass;
     private final ByteBufAllocator allocator;
 
     private volatile boolean isClosed;
@@ -75,12 +79,13 @@ final class NettyStream implements Stream {
     private volatile PendingReader pendingReader;
     private volatile Throwable pendingException;
 
-    public NettyStream(final ServerAddress address, final SocketSettings settings, final SslSettings sslSettings,
-                       final EventLoopGroup workerGroup, final ByteBufAllocator allocator) {
+    NettyStream(final ServerAddress address, final SocketSettings settings, final SslSettings sslSettings, final EventLoopGroup workerGroup,
+                final Class<? extends SocketChannel> socketChannelClass, final ByteBufAllocator allocator) {
         this.address = address;
         this.settings = settings;
         this.sslSettings = sslSettings;
         this.workerGroup = workerGroup;
+        this.socketChannelClass = socketChannelClass;
         this.allocator = allocator;
     }
 
@@ -96,11 +101,12 @@ final class NettyStream implements Stream {
         handler.get();
     }
 
+    @SuppressWarnings("deprecation")
     @Override
     public void openAsync(final AsyncCompletionHandler<Void> handler) {
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(workerGroup);
-        bootstrap.channel(NioSocketChannel.class);
+        bootstrap.channel(socketChannelClass);
 
         bootstrap.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, settings.getConnectTimeout(MILLISECONDS));
         bootstrap.option(ChannelOption.TCP_NODELAY, true);
@@ -118,11 +124,14 @@ final class NettyStream implements Stream {
             @Override
             public void initChannel(final SocketChannel ch) throws Exception {
                 if (sslSettings.isEnabled()) {
-                    SSLEngine engine = SSLContext.getDefault().createSSLEngine(address.getHost(), address.getPort());
+                    SSLEngine engine = getSslContext().createSSLEngine(address.getHost(), address.getPort());
                     engine.setUseClientMode(true);
+                    SSLParameters sslParameters = engine.getSSLParameters();
+                    enableSni(address, sslParameters);
                     if (!sslSettings.isInvalidHostNameAllowed()) {
-                        engine.setSSLParameters(enableHostNameVerification(engine.getSSLParameters()));
+                        enableHostNameVerification(sslParameters);
                     }
+                    engine.setSSLParameters(sslParameters);
                     ch.pipeline().addFirst("ssl", new SslHandler(engine, false));
                 }
                 int readTimeout = settings.getReadTimeout(MILLISECONDS);
@@ -138,6 +147,12 @@ final class NettyStream implements Stream {
             public void operationComplete(final ChannelFuture future) throws Exception {
                 if (future.isSuccess()) {
                     channel = channelFuture.channel();
+                    channel.closeFuture().addListener(new ChannelFutureListener() {
+                        @Override
+                        public void operationComplete(final ChannelFuture f2) throws Exception {
+                            handleReadResponse(null, new IOException("The connection to the server was closed"));
+                        }
+                    });
                     handler.completed(null);
                 } else {
                     handler.failed(new MongoSocketOpenException("Exception opening socket", getAddress(), future.cause()));
@@ -164,9 +179,7 @@ final class NettyStream implements Stream {
     public void writeAsync(final List<ByteBuf> buffers, final AsyncCompletionHandler<Void> handler) {
         CompositeByteBuf composite = PooledByteBufAllocator.DEFAULT.compositeBuffer();
         for (ByteBuf cur : buffers) {
-            io.netty.buffer.ByteBuf byteBuf = ((NettyByteBuf) cur).asByteBuf();
-            composite.addComponent(byteBuf.retain());
-            composite.writerIndex(composite.writerIndex() + byteBuf.writerIndex());
+            composite.addComponent(true, ((NettyByteBuf) cur).asByteBuf());
         }
 
         channel.writeAndFlush(composite).addListener(new ChannelFutureListener() {
@@ -278,6 +291,34 @@ final class NettyStream implements Stream {
         return isClosed;
     }
 
+    public SocketSettings getSettings() {
+        return settings;
+    }
+
+    public SslSettings getSslSettings() {
+        return sslSettings;
+    }
+
+    public EventLoopGroup getWorkerGroup() {
+        return workerGroup;
+    }
+
+    public Class<? extends SocketChannel> getSocketChannelClass() {
+        return socketChannelClass;
+    }
+
+    public ByteBufAllocator getAllocator() {
+        return allocator;
+    }
+
+    private SSLContext getSslContext() {
+        try {
+            return (sslSettings.getContext() == null) ? SSLContext.getDefault() : sslSettings.getContext();
+        } catch (NoSuchAlgorithmException e) {
+            throw new MongoClientException("Unable to create default SSLContext", e);
+        }
+    }
+
     private class InboundBufferHandler extends SimpleChannelInboundHandler<io.netty.buffer.ByteBuf> {
         @Override
         protected void channelRead0(final ChannelHandlerContext ctx, final io.netty.buffer.ByteBuf buffer) throws Exception {
@@ -310,7 +351,7 @@ final class NettyStream implements Stream {
         private volatile T t;
         private volatile Throwable throwable;
 
-        public FutureAsyncCompletionHandler() {
+        FutureAsyncCompletionHandler() {
         }
 
         @Override
@@ -343,7 +384,6 @@ final class NettyStream implements Stream {
             }
         }
     }
-
 
     private void scheduleReadTimeout() {
         adjustTimeout(false);
@@ -384,6 +424,5 @@ final class NettyStream implements Stream {
                     }
                 }
             }
-
     }
 }

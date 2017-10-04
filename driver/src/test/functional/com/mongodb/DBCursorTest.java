@@ -22,7 +22,6 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.util.Arrays;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.concurrent.TimeUnit;
@@ -349,7 +348,7 @@ public class DBCursorTest extends DatabaseTestCase {
 
     @Test
     public void testShowDiskLoc() {
-        String fieldName = serverVersionAtLeast(Arrays.asList(3, 1, 0)) ? "$recordId" : "$diskLoc";
+        String fieldName = serverVersionAtLeast(3, 2) ? "$recordId" : "$diskLoc";
         DBCursor cursor = new DBCursor(collection, new BasicDBObject(), new BasicDBObject(), ReadPreference.primary())
                           .addSpecial("$showDiskLoc", true);
         try {
@@ -400,29 +399,36 @@ public class DBCursorTest extends DatabaseTestCase {
         assumeThat(isSharded(), is(false));
 
         // given
-        database.command(new BasicDBObject("profile", 2));
         String expectedComment = "test comment";
 
-        // when
-        DBCursor cursor = new DBCursor(collection, new BasicDBObject(), new BasicDBObject(), ReadPreference.primary())
-                          .comment(expectedComment);
-        while (cursor.hasNext()) {
-            cursor.next();
-        }
-
-        // then
         DBCollection profileCollection = database.getCollection("system.profile");
-        assertEquals(1, profileCollection.count());
-
-        DBObject profileDocument = profileCollection.findOne();
-        if (serverVersionAtLeast(asList(3, 1, 7))) {
-            assertEquals(expectedComment, ((DBObject) profileDocument.get("query")).get("comment"));
-        } else {
-            assertEquals(expectedComment, ((DBObject) profileDocument.get("query")).get("$comment"));
-        }
-        // finally
-        database.command(new BasicDBObject("profile", 0));
         profileCollection.drop();
+
+        database.command(new BasicDBObject("profile", 2));
+
+        try {
+            // when
+            DBCursor cursor = new DBCursor(collection, new BasicDBObject(), new BasicDBObject(), ReadPreference.primary())
+                              .comment(expectedComment);
+            while (cursor.hasNext()) {
+                cursor.next();
+            }
+
+            // then
+            assertEquals(1, profileCollection.count());
+
+            DBObject profileDocument = profileCollection.findOne();
+            if (serverVersionAtLeast(asList(3, 5, 8))) {
+                assertEquals(expectedComment, ((DBObject) profileDocument.get("command")).get("comment"));
+            } else if (serverVersionAtLeast(3, 2)) {
+                assertEquals(expectedComment, ((DBObject) profileDocument.get("query")).get("comment"));
+            } else {
+                assertEquals(expectedComment, ((DBObject) profileDocument.get("query")).get("$comment"));
+            }
+        } finally {
+            database.command(new BasicDBObject("profile", 0));
+            profileCollection.drop();
+        }
     }
 
     @Test
@@ -448,7 +454,6 @@ public class DBCursorTest extends DatabaseTestCase {
 
     @Test
     public void testMaxTimeForIterator() {
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
         enableMaxTimeFailPoint();
         DBCursor cursor = new DBCursor(collection, new BasicDBObject("x", 1), new BasicDBObject(), ReadPreference.primary());
         cursor.maxTime(1, TimeUnit.SECONDS);
@@ -465,7 +470,6 @@ public class DBCursorTest extends DatabaseTestCase {
     @Test
     public void testMaxTimeForIterable() {
         assumeThat(isSharded(), is(false));
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
         enableMaxTimeFailPoint();
         DBCursor cursor = new DBCursor(collection, new BasicDBObject("x", 1), new BasicDBObject(), ReadPreference.primary());
         cursor.maxTime(1, TimeUnit.SECONDS);
@@ -482,7 +486,6 @@ public class DBCursorTest extends DatabaseTestCase {
     @Test
     public void testMaxTimeForOne() {
         assumeThat(isSharded(), is(false));
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
         enableMaxTimeFailPoint();
         DBCursor cursor = new DBCursor(collection, new BasicDBObject("x", 1), new BasicDBObject(), ReadPreference.primary());
         cursor.maxTime(1, TimeUnit.SECONDS);
@@ -499,7 +502,6 @@ public class DBCursorTest extends DatabaseTestCase {
     @Test
     public void testMaxTimeForCount() {
         assumeThat(isSharded(), is(false));
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
         enableMaxTimeFailPoint();
         DBCursor cursor = new DBCursor(collection, new BasicDBObject("x", 1), new BasicDBObject(), ReadPreference.primary());
         cursor.maxTime(1, TimeUnit.SECONDS);
@@ -516,7 +518,6 @@ public class DBCursorTest extends DatabaseTestCase {
     @Test
     public void testMaxTimeForSize() {
         assumeThat(isSharded(), is(false));
-        assumeThat(serverVersionAtLeast(asList(2, 6, 0)), is(true));
         enableMaxTimeFailPoint();
         DBCursor cursor = new DBCursor(collection, new BasicDBObject("x", 1), new BasicDBObject(), ReadPreference.primary());
         cursor.maxTime(1, TimeUnit.SECONDS);

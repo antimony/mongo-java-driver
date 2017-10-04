@@ -16,9 +16,12 @@
 
 package com.mongodb.connection;
 
+import com.mongodb.MongoCompressor;
 import com.mongodb.async.SingleResultCallback;
+import org.bson.BsonArray;
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
+import org.bson.BsonString;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -31,9 +34,14 @@ import static com.mongodb.connection.DescriptionHelper.createConnectionDescripti
 
 class InternalStreamConnectionInitializer implements InternalConnectionInitializer {
     private final List<Authenticator> authenticators;
+    private final BsonDocument clientMetadataDocument;
+    private final List<MongoCompressor> requestedCompressors;
 
-    InternalStreamConnectionInitializer(final List<Authenticator> authenticators) {
+    InternalStreamConnectionInitializer(final List<Authenticator> authenticators, final BsonDocument clientMetadataDocument,
+                                        final List<MongoCompressor> requestedCompressors) {
         this.authenticators = notNull("authenticators", authenticators);
+        this.clientMetadataDocument = clientMetadataDocument;
+        this.requestedCompressors = notNull("requestedCompressors", requestedCompressors);
     }
 
     @Override
@@ -80,9 +88,24 @@ class InternalStreamConnectionInitializer implements InternalConnectionInitializ
     }
 
     private ConnectionDescription initializeConnectionDescription(final InternalConnection internalConnection) {
-        BsonDocument isMasterResult = executeCommand("admin", new BsonDocument("ismaster", new BsonInt32(1)), internalConnection);
+        BsonDocument isMasterResult = executeCommand("admin", createIsMasterCommand(), internalConnection);
         BsonDocument buildInfoResult = executeCommand("admin", new BsonDocument("buildinfo", new BsonInt32(1)), internalConnection);
         return createConnectionDescription(internalConnection.getDescription().getConnectionId(), isMasterResult, buildInfoResult);
+    }
+
+    private BsonDocument createIsMasterCommand() {
+        BsonDocument isMasterCommandDocument = new BsonDocument("ismaster", new BsonInt32(1));
+        if (clientMetadataDocument != null) {
+            isMasterCommandDocument.append("client", clientMetadataDocument);
+        }
+        if (!requestedCompressors.isEmpty()) {
+            BsonArray compressors = new BsonArray();
+            for (MongoCompressor cur : this.requestedCompressors) {
+                compressors.add(new BsonString(cur.getName()));
+            }
+            isMasterCommandDocument.append("compression", compressors);
+        }
+        return isMasterCommandDocument;
     }
 
     private ConnectionDescription completeConnectionDescriptionInitialization(final InternalConnection internalConnection,
@@ -103,7 +126,7 @@ class InternalStreamConnectionInitializer implements InternalConnectionInitializ
 
     private void initializeConnectionDescriptionAsync(final InternalConnection internalConnection,
                                                       final SingleResultCallback<ConnectionDescription> callback) {
-        executeCommandAsync("admin", new BsonDocument("ismaster", new BsonInt32(1)), internalConnection,
+        executeCommandAsync("admin", createIsMasterCommand(), internalConnection,
                             new SingleResultCallback<BsonDocument>() {
                                 @Override
                                 public void onResult(final BsonDocument isMasterResult, final Throwable t) {
@@ -167,7 +190,7 @@ class InternalStreamConnectionInitializer implements InternalConnectionInitializ
         private final SingleResultCallback<Void> callback;
         private final AtomicInteger currentAuthenticatorIndex = new AtomicInteger(-1);
 
-        public CompoundAuthenticator(final InternalConnection internalConnection, final ConnectionDescription connectionDescription,
+        CompoundAuthenticator(final InternalConnection internalConnection, final ConnectionDescription connectionDescription,
                                      final SingleResultCallback<Void> callback) {
             this.internalConnection = internalConnection;
             this.connectionDescription = connectionDescription;

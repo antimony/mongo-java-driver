@@ -24,13 +24,27 @@
     <suppress checks="MethodLength" files="QuickTour"/>
     <suppress checks="Regexp" files="QuickTour"/>
 
+    <suppress checks="MethodLength" files="PojoRoundTripTest"/>
+
+    <suppress checks="JavadocPackage" files="com[\\/]mongodb[\\/][^\\/]*\.java"/>
+    <suppress checks="JavadocPackage" files="com[\\/]mongodb[\\/]client[\\/][^\\/]*\.java"/>
+    <suppress checks="JavadocPackage" files="com[\\/]mongodb[\\/]client[\\/]model[\\/][^\\/]*\.java"/>
+    <suppress checks="JavadocPackage" files="org[\\/]bson[\\/][^\\/]*\.java"/>
+    <suppress checks="JavadocPackage" files="org[\\/]bson[\\/]io[\\/][^\\/]*\.java"/>
+    <suppress checks="JavadocPackage" files="org[\\/]bson[\\/]types[\\/][^\\/]*\.java"/>
+
     <suppress checks="Javadoc*" files="com[\\/]mongodb[\\/]internal[\\/]"/>
+    <suppress checks="Javadoc*" files="org[\\/]bson[\\/]internal[\\/]"/>
 
     <!--Do not check primer classes -->
     <suppress checks="Javadoc*" files=".*primer.*"/>
     <suppress checks="Regexp" files=".*primer.*"/>
     <suppress checks="AvoidStarImportCheck" files=".*primer.*"/>
     <suppress checks="VisibilityModifierCheck" files=".*primer.*"/>
+
+    <!--Do not check documentation tests classes -->
+    <suppress checks="Javadoc*" files=".*documentation.*"/>
+    <suppress checks="Regexp" files=".*documentation.*"/>
 
     <!--Do not check test classes -->
     <suppress checks="Javadoc*" files=".*test.*"/>
@@ -44,6 +58,8 @@
 
     <suppress checks="ParameterNumber" files="Connection"/>
     <suppress checks="ParameterNumber" files="DefaultServer"/>
+    <suppress checks="ParameterNumber" files="DefaultClusterFactory"/>
+    <suppress checks="ParameterNumber" files="DefaultClusterableServerFactory"/>
 
     <!--Legacy code that has not yet been cleaned-->
     <suppress checks="FinalClass" files="AggregationOptions"/>
@@ -61,6 +77,7 @@
     <suppress checks="ConstantName" files="JSONCallback"/>
     <suppress checks="ConstantName" files="Mongo"/>
     <suppress checks="ConstantName" files="ReflectionDBObject"/>
+    <suppress checks="ConstantName" files="Decimal128"/>  <!-- For NaN -->
 
     <suppress checks="JavadocMethod" files="BasicDBObject"/>
 
@@ -97,4 +114,16 @@
     <suppress checks="RegexpSingleline" files="Immutable"/>
     <suppress checks="RegexpSingleline" files="NotThreadSafe"/>
     <suppress checks="RegexpSingleline" files="ThreadSafe"/>
+
+    <!-- Pojo test entities -->
+    <suppress checks="ConstantName" files=".*org[\\/]bson[\\/]codecs[\\/]pojo[\\/]entities[\\/].*"/>
+    <suppress checks="VisibilityModifier" files=".*org[\\/]bson[\\/]codecs[\\/]pojo[\\/]entities[\\/].*"/>
+    <suppress checks="ParameterNumber" files=".*org[\\/]bson[\\/]codecs[\\/]pojo[\\/]entities[\\/].*"/>
+
+    <!-- Pojo test bench -->
+    <suppress checks="MemberName" files=".*org[\\/]bson[\\/]codecs[\\/]pojo[\\/]bench[\\/].*"/>
+    <suppress checks="MethodName" files=".*org[\\/]bson[\\/]codecs[\\/]pojo[\\/]bench[\\/].*"/>
+    <suppress checks="ParameterName" files=".*org[\\/]bson[\\/]codecs[\\/]pojo[\\/]bench[\\/].*"/>
+    <suppress checks="Regexp" files=".*org[\\/]bson[\\/]codecs[\\/]pojo[\\/]bench[\\/].*"/>
+
 </suppressions>

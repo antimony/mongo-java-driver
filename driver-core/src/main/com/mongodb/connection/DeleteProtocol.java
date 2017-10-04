@@ -43,16 +43,8 @@ class DeleteProtocol extends WriteProtocol {
 
     private final List<DeleteRequest> deletes;
 
-    /**
-     * Construct an instance.
-     *
-     * @param namespace    the namespace
-     * @param ordered      whether the delete are ordered
-     * @param writeConcern the write concern to apply
-     * @param deletes      the deletes
-     */
-    public DeleteProtocol(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
-                          final List<DeleteRequest> deletes) {
+    DeleteProtocol(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+                   final List<DeleteRequest> deletes) {
         super(namespace, ordered, writeConcern);
         this.deletes = deletes;
     }
@@ -101,12 +93,6 @@ class DeleteProtocol extends WriteProtocol {
     @Override
     protected RequestMessage createRequestMessage(final MessageSettings settings) {
         return new DeleteMessage(getNamespace().getFullName(), deletes, settings);
-    }
-
-    @Override
-    protected void appendToWriteCommandResponseDocument(final RequestMessage curMessage, final RequestMessage nextMessage,
-                                                        final WriteConcernResult writeConcernResult, final BsonDocument response) {
-        response.append("n", new BsonInt32(writeConcernResult.getCount()));
     }
 
     @Override

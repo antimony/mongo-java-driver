@@ -33,8 +33,6 @@ import static com.mongodb.ClusterFixture.enableMaxTimeFailPoint
 import static com.mongodb.ClusterFixture.executeAsync
 import static com.mongodb.ClusterFixture.getBinding
 import static com.mongodb.ClusterFixture.isSharded
-import static com.mongodb.ClusterFixture.serverVersionAtLeast
-import static java.util.Arrays.asList
 
 class CommandOperationSpecification extends OperationFunctionalSpecification {
 
@@ -111,7 +109,7 @@ class CommandOperationSpecification extends OperationFunctionalSpecification {
         result.containsKey('value')
     }
 
-    @IgnoreIf({ isSharded() || !serverVersionAtLeast(asList(2, 6, 0)) })
+    @IgnoreIf({ isSharded() })
     def 'should throw execution timeout exception from execute'() {
         given:
         def commandOperation = new CommandReadOperation<BsonDocument>(getNamespace().databaseName,
@@ -131,7 +129,7 @@ class CommandOperationSpecification extends OperationFunctionalSpecification {
     }
 
     @Category(Async)
-    @IgnoreIf({ isSharded() || !serverVersionAtLeast(asList(2, 6, 0)) })
+    @IgnoreIf({ isSharded() })
     def 'should throw execution timeout exception from executeAsync'() {
         given:
         def commandOperation = new CommandReadOperation<BsonDocument>(getNamespace().databaseName,

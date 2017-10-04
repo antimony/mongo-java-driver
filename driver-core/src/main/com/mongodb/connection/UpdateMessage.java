@@ -31,28 +31,16 @@ import static com.mongodb.bulk.WriteRequest.Type.REPLACE;
  *
  * @mongodb.driver.manual ../meta-driver/latest/legacy/mongodb-wire-protocol/#op-update OP_UPDATE
  */
-class UpdateMessage extends RequestMessage {
+class UpdateMessage extends LegacyMessage {
     private final List<UpdateRequest> updates;
 
-    /**
-     * Construct an instance.
-     *
-     * @param collectionName the collection name
-     * @param updates the list of update requests
-     * @param settings the message settings
-     */
-    public UpdateMessage(final String collectionName, final List<UpdateRequest> updates, final MessageSettings settings) {
+    UpdateMessage(final String collectionName, final List<UpdateRequest> updates, final MessageSettings settings) {
         super(collectionName, OpCode.OP_UPDATE, settings);
         this.updates = updates;
     }
 
     public List<UpdateRequest> getUpdateRequests() {
         return updates;
-    }
-
-    @Override
-    protected RequestMessage encodeMessageBody(final BsonOutput bsonOutput, final int messageStartPosition) {
-        return encodeMessageBodyWithMetadata(bsonOutput, messageStartPosition).getNextMessage();
     }
 
     @Override

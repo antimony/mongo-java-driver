@@ -23,6 +23,7 @@ import org.bson.BsonBinaryWriterSettings;
 import org.bson.BsonDocument;
 import org.bson.BsonWriterSettings;
 import org.bson.FieldNameValidator;
+import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.EncoderContext;
 import org.bson.io.BsonOutput;
 
@@ -31,7 +32,7 @@ import static com.mongodb.MongoNamespace.COMMAND_COLLECTION_NAME;
 /**
  * Abstract base class for write command message.  Supports splitting into multiple messages.
  */
-abstract class BaseWriteCommandMessage extends RequestMessage {
+abstract class BaseWriteCommandMessage extends CommandMessage {
     // Server allows command document to exceed max document size by 16K, so that it can comfortably fit a stored document inside it
     private static final int HEADROOM = 16 * 1024;
 
@@ -40,18 +41,9 @@ abstract class BaseWriteCommandMessage extends RequestMessage {
     private final WriteConcern writeConcern;
     private final Boolean bypassDocumentValidation;
 
-    /**
-     * Construct an instance.
-     *
-     * @param writeNamespace           the namespace
-     * @param ordered                  whether the writes are ordered
-     * @param writeConcern             the write concern
-     * @param bypassDocumentValidation the bypass documentation validation flag
-     * @param settings                 the message settings
-     */
-    public BaseWriteCommandMessage(final MongoNamespace writeNamespace, final boolean ordered, final WriteConcern writeConcern,
-                                   final Boolean bypassDocumentValidation, final MessageSettings settings) {
-        super(new MongoNamespace(writeNamespace.getDatabaseName(), COMMAND_COLLECTION_NAME).getFullName(), OpCode.OP_QUERY, settings);
+    BaseWriteCommandMessage(final MongoNamespace writeNamespace, final boolean ordered, final WriteConcern writeConcern,
+                            final Boolean bypassDocumentValidation, final MessageSettings settings) {
+        super(new MongoNamespace(writeNamespace.getDatabaseName(), COMMAND_COLLECTION_NAME).getFullName(), getOpCode(settings), settings);
 
         this.writeNamespace = writeNamespace;
         this.ordered = ordered;
@@ -95,11 +87,6 @@ abstract class BaseWriteCommandMessage extends RequestMessage {
         return bypassDocumentValidation;
     }
 
-    @Override
-    public BaseWriteCommandMessage encode(final BsonOutput outputStream) {
-        return (BaseWriteCommandMessage) super.encode(outputStream);
-    }
-
     /**
      * Gets the number of write requests left to encode.  Note that these may end up being split into multiple messages.
      *
@@ -108,13 +95,8 @@ abstract class BaseWriteCommandMessage extends RequestMessage {
     public abstract int getItemCount();
 
     @Override
-    protected BaseWriteCommandMessage encodeMessageBody(final BsonOutput outputStream, final int messageStartPosition) {
-        return (BaseWriteCommandMessage) encodeMessageBodyWithMetadata(outputStream, messageStartPosition).getNextMessage();
-    }
-
-    @Override
-    protected EncodingMetadata encodeMessageBodyWithMetadata(final BsonOutput outputStream, final int messageStartPosition) {
-        BaseWriteCommandMessage nextMessage = null;
+    protected EncodingMetadata encodeMessageBodyWithMetadata(final BsonOutput outputStream, final SessionContext sessionContext) {
+        BaseWriteCommandMessage nextMessage;
 
         writeCommandHeader(outputStream);
 
@@ -127,11 +109,31 @@ abstract class BaseWriteCommandMessage extends RequestMessage {
             writer.writeStartDocument();
             writeCommandPrologue(writer);
             nextMessage = writeTheWrites(outputStream, commandStartPosition, writer);
+            if (useOpMsg()) {
+                writer.writeString("$db", getWriteNamespace().getDatabaseName());
+                if (sessionContext.hasSession()) {
+                    if (sessionContext.getClusterTime() != null) {
+                        writer.writeName("$clusterTime");
+                        new BsonDocumentCodec().encode(writer, sessionContext.getClusterTime(),
+                                EncoderContext.builder().build());
+                    }
+                    writer.writeName("lsid");
+                    new BsonDocumentCodec().encode(writer, sessionContext.getSessionId(),
+                            EncoderContext.builder().build());
+                }
+
+            }
             writer.writeEndDocument();
         } finally {
             writer.close();
         }
         return new EncodingMetadata(nextMessage, firstDocumentStartPosition);
+    }
+
+
+    @Override
+    boolean isResponseExpected() {
+        return !useOpMsg() || writeConcern.isAcknowledged();
     }
 
     /**
@@ -142,11 +144,16 @@ abstract class BaseWriteCommandMessage extends RequestMessage {
     protected abstract FieldNameValidator getFieldNameValidator();
 
     private void writeCommandHeader(final BsonOutput outputStream) {
-        outputStream.writeInt32(0);
-        outputStream.writeCString(getCollectionName());
+        if (useOpMsg()) {
+            outputStream.writeInt32(getFlagBits());  // flag bits
+            outputStream.writeByte(0);   // payload type
+        } else {
+            outputStream.writeInt32(0);
+            outputStream.writeCString(getCollectionName());
 
-        outputStream.writeInt32(0);
-        outputStream.writeInt32(-1);
+            outputStream.writeInt32(0);
+            outputStream.writeInt32(-1);
+        }
     }
 
     /**
@@ -164,8 +171,7 @@ abstract class BaseWriteCommandMessage extends RequestMessage {
      * @param writer               the writer
      * @return the next message to encode, if this one overflowed.  This may be null, which indicates that we're done
      */
-    protected abstract BaseWriteCommandMessage writeTheWrites(final BsonOutput bsonOutput, final int commandStartPosition,
-                                                              final BsonBinaryWriter writer);
+    protected abstract BaseWriteCommandMessage writeTheWrites(BsonOutput bsonOutput, int commandStartPosition, BsonBinaryWriter writer);
 
     boolean exceedsLimits(final int batchLength, final int batchItemCount) {
         return (exceedsBatchLengthLimit(batchLength, batchItemCount) || exceedsBatchItemCountLimit(batchItemCount));
@@ -192,6 +198,14 @@ abstract class BaseWriteCommandMessage extends RequestMessage {
         }
         if (getBypassDocumentValidation() != null) {
             writer.writeBoolean("bypassDocumentValidation", getBypassDocumentValidation());
+        }
+    }
+
+    private int getFlagBits() {
+        if (writeConcern.isAcknowledged()) {
+            return 0;
+        } else {
+            return 1 << 1;
         }
     }
 }

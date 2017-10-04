@@ -17,7 +17,14 @@
 package com.mongodb.async.client;
 
 import com.mongodb.MongoNamespace;
+import com.mongodb.async.SingleResultCallback;
+import com.mongodb.client.model.Collation;
+import com.mongodb.client.model.CollationAlternate;
+import com.mongodb.client.model.CollationCaseFirst;
+import com.mongodb.client.model.CollationMaxVariable;
+import com.mongodb.client.model.CollationStrength;
 import com.mongodb.client.model.CountOptions;
+import com.mongodb.client.model.DeleteOptions;
 import com.mongodb.client.model.FindOneAndDeleteOptions;
 import com.mongodb.client.model.FindOneAndReplaceOptions;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
@@ -47,12 +54,10 @@ import java.util.Collection;
 import java.util.List;
 
 import static com.mongodb.ClusterFixture.getDefaultDatabaseName;
-import static com.mongodb.ClusterFixture.serverVersionAtLeast;
+import static com.mongodb.ClusterFixture.serverVersionGreaterThan;
+import static com.mongodb.ClusterFixture.serverVersionLessThan;
 import static com.mongodb.async.client.Fixture.getDefaultDatabase;
-import static java.util.Arrays.asList;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assume.assumeFalse;
-import static org.junit.Assume.assumeTrue;
 
 // See https://github.com/mongodb/specifications/tree/master/source/crud/tests
 @RunWith(Parameterized.class)
@@ -93,9 +98,8 @@ public class CrudTest extends DatabaseTestCase {
         BsonDocument outcome = getOperationMongoOperations(definition.getDocument("operation"));
         BsonDocument expectedOutcome = definition.getDocument("outcome");
 
-        if (checkResult()) {
-            assertEquals(description, expectedOutcome.get("result"), outcome.get("result"));
-        }
+        assertEquals(description, expectedOutcome.get("result"), outcome.get("result"));
+
         if (expectedOutcome.containsKey("collection")) {
             assertCollectionEquals(expectedOutcome.getDocument("collection"));
         }
@@ -106,24 +110,20 @@ public class CrudTest extends DatabaseTestCase {
         List<Object[]> data = new ArrayList<Object[]>();
         for (File file : JsonPoweredTestHelper.getTestFiles("/crud")) {
             BsonDocument testDocument = JsonPoweredTestHelper.getTestDocument(file);
+            if (testDocument.containsKey("minServerVersion")
+                        && serverVersionLessThan(testDocument.getString("minServerVersion").getValue())) {
+                continue;
+            }
+            if (testDocument.containsKey("maxServerVersion")
+                        && serverVersionGreaterThan(testDocument.getString("maxServerVersion").getValue())) {
+                continue;
+            }
             for (BsonValue test : testDocument.getArray("tests")) {
                 data.add(new Object[]{file.getName(), test.asDocument().getString("description").getValue(),
                         testDocument.getArray("data"), test.asDocument()});
             }
         }
         return data;
-    }
-
-    private boolean checkResult() {
-        if (filename.contains("insert")) {
-            // We don't return any id's for insert commands
-            return false;
-        } else if (!serverVersionAtLeast(asList(3, 0, 0))
-                && description.contains("when no documents match with upsert returning the document before modification")) {
-            // Pre 3.0 versions of MongoDB return an empty document rather than a null
-            return false;
-        }
-        return true;
     }
 
     private void assertCollectionEquals(final BsonDocument expectedCollection) {
@@ -174,6 +174,10 @@ public class CrudTest extends DatabaseTestCase {
             return toResult((MongoOperationUpdateResult) result);
         } else if (result instanceof MongoOperationDeleteResult) {
             return toResult((MongoOperationDeleteResult) result);
+        } else if (result instanceof MongoOperationInsertOneResult) {
+            return toResult((MongoOperationInsertOneResult) result);
+        } else if (result instanceof MongoOperationInsertManyResult) {
+            return toResult((MongoOperationInsertManyResult) result);
         } else if (result instanceof DistinctIterable<?>) {
             return toResult((DistinctIterable<BsonInt32>) result);
         } else if (result instanceof MongoIterable<?>) {
@@ -207,14 +211,18 @@ public class CrudTest extends DatabaseTestCase {
     }
 
     private BsonDocument toResult(final MongoOperationUpdateResult operation) {
-        assumeTrue(serverVersionAtLeast(asList(2, 6, 0))); // ModifiedCount is not accessible pre 2.6
-
         UpdateResult updateResult = operation.get();
-        BsonDocument resultDoc = new BsonDocument("matchedCount", new BsonInt32((int) updateResult.getMatchedCount()))
-                .append("modifiedCount", new BsonInt32((int) updateResult.getModifiedCount()));
-        if (updateResult.getUpsertedId() != null) {
+        BsonDocument resultDoc = new BsonDocument("matchedCount", new BsonInt32((int) updateResult.getMatchedCount()));
+        if (updateResult.isModifiedCountAvailable()) {
+            resultDoc.append("modifiedCount", new BsonInt32((int) updateResult.getModifiedCount()));
+        }
+        // If the upsertedId is an ObjectId that means it came from the server and can't be verified.
+        // This check is to handle the "ReplaceOne with upsert when no documents match without an id specified" test
+        // in replaceOne-pre_2.6
+        if (updateResult.getUpsertedId() != null && !updateResult.getUpsertedId().isObjectId()) {
             resultDoc.append("upsertedId", updateResult.getUpsertedId());
         }
+        resultDoc.append("upsertedCount", updateResult.getUpsertedId() == null ? new BsonInt32(0) : new BsonInt32(1));
         return toResult(resultDoc);
     }
 
@@ -223,20 +231,34 @@ public class CrudTest extends DatabaseTestCase {
         return toResult(new BsonDocument("deletedCount", new BsonInt32((int) deleteResult.getDeletedCount())));
     }
 
+    private BsonDocument toResult(final MongoOperationInsertOneResult operation) {
+        InsertOneResult insertOneResult = operation.get();
+        return toResult(new BsonDocument("insertedId", insertOneResult.id));
+    }
+
+    private BsonDocument toResult(final MongoOperationInsertManyResult operation) {
+        InsertManyResult insertManyResult = operation.get();
+        return toResult(new BsonDocument("insertedIds", insertManyResult.ids));
+    }
+
     private BsonDocument toResult(final BsonValue results) {
         return new BsonDocument("result", results != null ? results : BsonNull.VALUE);
     }
 
     private AggregateIterable<BsonDocument> getAggregateMongoOperation(final BsonDocument arguments) {
-        if (!serverVersionAtLeast(asList(2, 6, 0))) {
-            assumeFalse(description.contains("$out"));
-        }
-
         List<BsonDocument> pipeline = new ArrayList<BsonDocument>();
         for (BsonValue stage : arguments.getArray("pipeline")) {
             pipeline.add(stage.asDocument());
         }
-        return collection.aggregate(pipeline).batchSize(arguments.getNumber("batchSize").intValue());
+        AggregateIterable<BsonDocument> iterable = collection.aggregate(pipeline);
+        if (arguments.containsKey("batchSize")) {
+            iterable.batchSize(arguments.getNumber("batchSize").intValue());
+        }
+        if (arguments.containsKey("collation")) {
+            iterable.collation(getCollation(arguments.getDocument("collation")));
+        }
+
+        return iterable;
     }
 
     private MongoOperationLong getCountMongoOperation(final BsonDocument arguments) {
@@ -250,34 +272,51 @@ public class CrudTest extends DatabaseTestCase {
                 if (arguments.containsKey("limit")) {
                     options.limit(arguments.getNumber("limit").intValue());
                 }
+                if (arguments.containsKey("collation")) {
+                    options.collation(getCollation(arguments.getDocument("collation")));
+                }
                 collection.count(arguments.getDocument("filter"), options, getCallback());
             }
         };
     }
 
-    private DistinctIterable<BsonInt32> getDistinctMongoOperation(final BsonDocument arguments) {
-        return collection.distinct(arguments.getString("fieldName").getValue(), arguments.getDocument("filter"), BsonInt32.class);
+    private DistinctIterable<BsonValue> getDistinctMongoOperation(final BsonDocument arguments) {
+        DistinctIterable<BsonValue> iterable = collection.distinct(arguments.getString("fieldName").getValue(), BsonValue.class);
+        if (arguments.containsKey("filter")) {
+            iterable.filter(arguments.getDocument("filter"));
+        }
+        if (arguments.containsKey("collation")) {
+            iterable.collation(getCollation(arguments.getDocument("collation")));
+        }
+        return iterable;
     }
 
     private FindIterable<BsonDocument> getFindMongoOperation(final BsonDocument arguments) {
-        FindIterable<BsonDocument> findIterable = collection.find(arguments.getDocument("filter"));
+        FindIterable<BsonDocument> iterable = collection.find(arguments.getDocument("filter"));
         if (arguments.containsKey("skip")) {
-            findIterable.skip(arguments.getNumber("skip").intValue());
+            iterable.skip(arguments.getNumber("skip").intValue());
         }
         if (arguments.containsKey("limit")) {
-            findIterable.limit(arguments.getNumber("limit").intValue());
+            iterable.limit(arguments.getNumber("limit").intValue());
         }
         if (arguments.containsKey("batchSize")) {
-            findIterable.batchSize(arguments.getNumber("batchSize").intValue());
+            iterable.batchSize(arguments.getNumber("batchSize").intValue());
         }
-        return findIterable;
+        if (arguments.containsKey("collation")) {
+            iterable.collation(getCollation(arguments.getDocument("collation")));
+        }
+        return iterable;
     }
 
     private MongoOperationDeleteResult getDeleteManyMongoOperation(final BsonDocument arguments) {
         return new MongoOperationDeleteResult() {
             @Override
             public void execute() {
-                collection.deleteMany(arguments.getDocument("filter"), getCallback());
+                DeleteOptions options = new DeleteOptions();
+                if (arguments.containsKey("collation")) {
+                    options.collation(getCollation(arguments.getDocument("collation")));
+                }
+                collection.deleteMany(arguments.getDocument("filter"), options, getCallback());
             }
         };
     }
@@ -286,7 +325,11 @@ public class CrudTest extends DatabaseTestCase {
         return new MongoOperationDeleteResult() {
             @Override
             public void execute() {
-                collection.deleteOne(arguments.getDocument("filter"), getCallback());
+                DeleteOptions options = new DeleteOptions();
+                if (arguments.containsKey("collation")) {
+                    options.collation(getCollation(arguments.getDocument("collation")));
+                }
+                collection.deleteOne(arguments.getDocument("filter"), options, getCallback());
             }
         };
     }
@@ -302,14 +345,15 @@ public class CrudTest extends DatabaseTestCase {
                 if (arguments.containsKey("sort")) {
                     options.sort(arguments.getDocument("sort"));
                 }
+                if (arguments.containsKey("collation")) {
+                    options.collation(getCollation(arguments.getDocument("collation")));
+                }
                 collection.findOneAndDelete(arguments.getDocument("filter"), options, getCallback());
             }
         };
     }
 
     private MongoOperationBsonDocument getFindOneAndReplaceMongoOperation(final BsonDocument arguments) {
-        assumeTrue(serverVersionAtLeast(asList(2, 6, 0))); // in 2.4 the server can ignore the supplied _id and creates an ObjectID
-
         return new MongoOperationBsonDocument() {
             @Override
             public void execute() {
@@ -326,6 +370,9 @@ public class CrudTest extends DatabaseTestCase {
                 if (arguments.containsKey("returnDocument")) {
                     options.returnDocument(arguments.getString("returnDocument").getValue().equals("After") ? ReturnDocument.AFTER
                             : ReturnDocument.BEFORE);
+                }
+                if (arguments.containsKey("collation")) {
+                    options.collation(getCollation(arguments.getDocument("collation")));
                 }
                 collection.findOneAndReplace(arguments.getDocument("filter"), arguments.getDocument("replacement"), options, getCallback());
             }
@@ -351,29 +398,56 @@ public class CrudTest extends DatabaseTestCase {
                     options.returnDocument(arguments.getString("returnDocument").getValue().equals("After") ? ReturnDocument.AFTER
                             : ReturnDocument.BEFORE);
                 }
+                if (arguments.containsKey("collation")) {
+                    options.collation(getCollation(arguments.getDocument("collation")));
+                }
                 collection.findOneAndUpdate(arguments.getDocument("filter"), arguments.getDocument("update"), options, getCallback());
             }
         };
     }
 
-    private MongoOperationVoid getInsertOneMongoOperation(final BsonDocument arguments) {
-        return new MongoOperationVoid() {
+    private MongoOperationInsertOneResult getInsertOneMongoOperation(final BsonDocument arguments) {
+        return new MongoOperationInsertOneResult() {
             @Override
             public void execute() {
-                collection.insertOne(arguments.getDocument("document"), getCallback());
+                final BsonDocument document = arguments.getDocument("document");
+                collection.insertOne(document, new SingleResultCallback<Void>() {
+                    @Override
+                    public void onResult(final Void result, final Throwable t) {
+                        if (t != null) {
+                            getCallback().onResult(null, t);
+                        } else {
+                            getCallback().onResult(new InsertOneResult(document.get("_id")), null);
+                        }
+
+                    }
+                });
             }
         };
     }
 
-    private MongoOperationVoid getInsertManyMongoOperation(final BsonDocument arguments) {
-        return new MongoOperationVoid() {
+    private MongoOperationInsertManyResult getInsertManyMongoOperation(final BsonDocument arguments) {
+        return new MongoOperationInsertManyResult() {
             @Override
             public void execute() {
-                List<BsonDocument> documents = new ArrayList<BsonDocument>();
+                final List<BsonDocument> documents = new ArrayList<BsonDocument>();
                 for (BsonValue document : arguments.getArray("documents")) {
                     documents.add(document.asDocument());
                 }
-                collection.insertMany(documents, getCallback());
+                collection.insertMany(documents, new SingleResultCallback<Void>() {
+                    @Override
+                    public void onResult(final Void result, final Throwable t) {
+                        if (t != null) {
+                            getCallback().onResult(null, t);
+                        } else {
+                            BsonArray insertedIds = new BsonArray();
+                            for (BsonDocument document : documents) {
+                                insertedIds.add(document.get("_id"));
+                            }
+                            getCallback().onResult(new InsertManyResult(insertedIds), null);
+                        }
+                    }
+                });
             }
         };
     }
@@ -385,6 +459,9 @@ public class CrudTest extends DatabaseTestCase {
                 UpdateOptions options = new UpdateOptions();
                 if (arguments.containsKey("upsert")) {
                     options.upsert(arguments.getBoolean("upsert").getValue());
+                }
+                if (arguments.containsKey("collation")) {
+                    options.collation(getCollation(arguments.getDocument("collation")));
                 }
                 collection.replaceOne(arguments.getDocument("filter"), arguments.getDocument("replacement"), options, getCallback());
             }
@@ -399,6 +476,9 @@ public class CrudTest extends DatabaseTestCase {
                 if (arguments.containsKey("upsert")) {
                     options.upsert(arguments.getBoolean("upsert").getValue());
                 }
+                if (arguments.containsKey("collation")) {
+                    options.collation(getCollation(arguments.getDocument("collation")));
+                }
                 collection.updateMany(arguments.getDocument("filter"), arguments.getDocument("update"), options, getCallback());
             }
         };
@@ -412,9 +492,48 @@ public class CrudTest extends DatabaseTestCase {
                 if (arguments.containsKey("upsert")) {
                     options.upsert(arguments.getBoolean("upsert").getValue());
                 }
+                if (arguments.containsKey("collation")) {
+                    options.collation(getCollation(arguments.getDocument("collation")));
+                }
                 collection.updateOne(arguments.getDocument("filter"), arguments.getDocument("update"), options, getCallback());
             }
         };
+    }
+
+
+    Collation getCollation(final BsonDocument bsonCollation) {
+        Collation.Builder builder = Collation.builder();
+        if (bsonCollation.containsKey("locale")) {
+            builder.locale(bsonCollation.getString("locale").getValue());
+        }
+        if (bsonCollation.containsKey("caseLevel")) {
+            builder.caseLevel(bsonCollation.getBoolean("caseLevel").getValue());
+        }
+        if (bsonCollation.containsKey("caseFirst")) {
+            builder.collationCaseFirst(CollationCaseFirst.fromString(bsonCollation.getString("caseFirst").getValue()));
+        }
+        if (bsonCollation.containsKey("strength")) {
+            builder.collationStrength(CollationStrength.fromInt(bsonCollation.getInt32("strength").getValue()));
+        }
+        if (bsonCollation.containsKey("numericOrdering")) {
+            builder.numericOrdering(bsonCollation.getBoolean("numericOrdering").getValue());
+        }
+        if (bsonCollation.containsKey("strength")) {
+            builder.collationStrength(CollationStrength.fromInt(bsonCollation.getInt32("strength").getValue()));
+        }
+        if (bsonCollation.containsKey("alternate")) {
+            builder.collationAlternate(CollationAlternate.fromString(bsonCollation.getString("alternate").getValue()));
+        }
+        if (bsonCollation.containsKey("maxVariable")) {
+            builder.collationMaxVariable(CollationMaxVariable.fromString(bsonCollation.getString("maxVariable").getValue()));
+        }
+        if (bsonCollation.containsKey("normalization")) {
+            builder.normalization(bsonCollation.getBoolean("normalization").getValue());
+        }
+        if (bsonCollation.containsKey("backwards")) {
+            builder.backwards(bsonCollation.getBoolean("backwards").getValue());
+        }
+        return builder.build();
     }
 
     abstract class MongoOperationLong extends MongoOperation<Long> {
@@ -433,4 +552,25 @@ public class CrudTest extends DatabaseTestCase {
     abstract class MongoOperationVoid extends MongoOperation<Void> {
     }
 
+    abstract class MongoOperationInsertOneResult extends MongoOperation<InsertOneResult> {
+    }
+
+    abstract class MongoOperationInsertManyResult extends MongoOperation<InsertManyResult> {
+    }
+
+    private final class InsertOneResult {
+        private BsonValue id;
+
+        private InsertOneResult(final BsonValue id) {
+            this.id = id;
+        }
+    }
+
+    private final class InsertManyResult {
+        private BsonArray ids;
+
+        private InsertManyResult(final BsonArray ids) {
+            this.ids = ids;
+        }
+    }
 }

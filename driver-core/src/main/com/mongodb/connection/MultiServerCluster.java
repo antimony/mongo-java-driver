@@ -21,6 +21,7 @@ import com.mongodb.diagnostics.logging.Logger;
 import com.mongodb.diagnostics.logging.Loggers;
 import com.mongodb.event.ClusterDescriptionChangedEvent;
 import com.mongodb.event.ServerDescriptionChangedEvent;
+import com.mongodb.event.ServerListenerAdapter;
 import org.bson.types.ObjectId;
 
 import java.util.ArrayList;
@@ -64,7 +65,7 @@ final class MultiServerCluster extends BaseCluster {
         }
     }
 
-    public MultiServerCluster(final ClusterId clusterId, final ClusterSettings settings, final ClusterableServerFactory serverFactory) {
+    MultiServerCluster(final ClusterId clusterId, final ClusterSettings settings, final ClusterableServerFactory serverFactory) {
         super(clusterId, settings, serverFactory);
         isTrue("connection mode is multiple", settings.getMode() == ClusterConnectionMode.MULTIPLE);
         clusterType = settings.getRequiredClusterType();
@@ -85,7 +86,8 @@ final class MultiServerCluster extends BaseCluster {
             newDescription = updateDescription();
         }
         fireChangeEvent(new ClusterDescriptionChangedEvent(clusterId, newDescription,
-                new ClusterDescription(settings.getMode(), ClusterType.UNKNOWN, Collections.<ServerDescription>emptyList())));
+                new ClusterDescription(settings.getMode(), ClusterType.UNKNOWN, Collections.<ServerDescription>emptyList(),
+                                              settings, serverFactory.getSettings())));
     }
 
     @Override
@@ -119,7 +121,7 @@ final class MultiServerCluster extends BaseCluster {
     }
 
 
-    private final class DefaultServerStateListener extends NoOpServerListener {
+    private final class DefaultServerStateListener extends ServerListenerAdapter {
         @Override
         public void serverDescriptionChanged(final ServerDescriptionChangedEvent event) {
             onChange(event);
@@ -214,7 +216,8 @@ final class MultiServerCluster extends BaseCluster {
 
         ensureServers(newDescription);
 
-        if (newDescription.getCanonicalAddress() != null && !newDescription.getAddress().sameHost(newDescription.getCanonicalAddress())) {
+        if (newDescription.getCanonicalAddress() != null
+                && !newDescription.getAddress().equals(new ServerAddress(newDescription.getCanonicalAddress()))) {
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.info(format("Canonical address %s does not match server address.  Removing %s from client view of cluster",
                                    newDescription.getCanonicalAddress(), newDescription.getAddress()));
@@ -329,7 +332,8 @@ final class MultiServerCluster extends BaseCluster {
     }
 
     private ClusterDescription updateDescription() {
-        ClusterDescription newDescription = new ClusterDescription(MULTIPLE, clusterType, getNewServerDescriptionList());
+        ClusterDescription newDescription = new ClusterDescription(MULTIPLE, clusterType, getNewServerDescriptionList(),
+                                                                          getSettings(), getServerFactory().getSettings());
         updateDescription(newDescription);
         return newDescription;
     }

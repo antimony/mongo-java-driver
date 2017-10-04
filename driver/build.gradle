@@ -20,7 +20,7 @@ archivesBaseName = 'mongodb-driver'
 def configDir = new File(rootDir, 'config')
 
 sourceSets {
-    test.java.srcDirs += ['src/test/acceptance', 'src/examples']
+    test.groovy.srcDirs += ['src/examples']
 }
 
 test {
@@ -37,13 +37,13 @@ dependencies {
 
 clirr {
     excludeFilter = new File("$configDir/clirr-exclude.yml")
-    baseline 'org.mongodb:mongodb-driver:3.2.0'
+    baseline 'org.mongodb:mongodb-driver:3.4.0'
     failOnErrors = false
 }
 
 tasks.withType(Checkstyle) {
     // needed so the Javadoc checks can find the code in other modules
-    classpath = files(project(':driver-core').sourceSets.main.output, sourceSets.main.output);
+    classpath = files(project(':driver-core').sourceSets.main.output, sourceSets.main.output)
 }
 
 modifyPom {

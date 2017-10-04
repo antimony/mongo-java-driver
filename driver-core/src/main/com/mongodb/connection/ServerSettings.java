@@ -16,17 +16,18 @@
 
 package com.mongodb.connection;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.annotations.Immutable;
 import com.mongodb.annotations.NotThreadSafe;
 import com.mongodb.event.ServerListener;
 import com.mongodb.event.ServerMonitorListener;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static com.mongodb.assertions.Assertions.notNull;
+import static java.util.Collections.unmodifiableList;
 
 /**
  * Settings relating to monitoring of each server.
@@ -50,14 +51,36 @@ public class ServerSettings {
     }
 
     /**
+     * Creates a builder instance.
+     *
+     * @param serverSettings existing ServerSettings to default the builder settings on.
+     * @return a builder
+     * @since 3.5
+     */
+    public static Builder builder(final ServerSettings serverSettings) {
+        return new Builder(serverSettings);
+    }
+
+    /**
      * A builder for the settings.
      */
     @NotThreadSafe
-    public static class Builder {
+    public static final class Builder {
         private long heartbeatFrequencyMS = 10000;
         private long minHeartbeatFrequencyMS = 500;
         private final List<ServerListener> serverListeners = new ArrayList<ServerListener>();
         private final List<ServerMonitorListener> serverMonitorListeners = new ArrayList<ServerMonitorListener>();
+
+        private Builder() {
+        }
+
+        private Builder(final ServerSettings serverSettings) {
+            notNull("serverSettings", serverSettings);
+            heartbeatFrequencyMS = serverSettings.heartbeatFrequencyMS;
+            minHeartbeatFrequencyMS = serverSettings.minHeartbeatFrequencyMS;
+            serverListeners.addAll(serverSettings.serverListeners);
+            serverMonitorListeners.addAll(serverSettings.serverMonitorListeners);
+        }
 
         /**
          * Sets the frequency that the cluster monitor attempts to reach each server. The default value is 10 seconds.
@@ -111,6 +134,20 @@ public class ServerSettings {
         }
 
         /**
+         * Take the settings from the given ConnectionString and add them to the builder
+         *
+         * @param connectionString a URI containing details of how to connect to MongoDB
+         * @return this
+         * @since 3.3
+         */
+        public Builder applyConnectionString(final ConnectionString connectionString) {
+            if (connectionString.getHeartbeatFrequency() != null) {
+                heartbeatFrequencyMS = connectionString.getHeartbeatFrequency();
+            }
+            return this;
+        }
+
+        /**
          * Create a new ServerSettings from the settings applied to this builder.
          *
          * @return a ServerSettings with the given settings.
@@ -148,7 +185,7 @@ public class ServerSettings {
      * @since 3.3
      */
     public List<ServerListener> getServerListeners() {
-        return Collections.unmodifiableList(serverListeners);
+        return serverListeners;
     }
 
     /**
@@ -158,7 +195,7 @@ public class ServerSettings {
      * @since 3.3
      */
     public List<ServerMonitorListener> getServerMonitorListeners() {
-        return Collections.unmodifiableList(serverMonitorListeners);
+        return serverMonitorListeners;
     }
 
     @Override
@@ -211,7 +248,7 @@ public class ServerSettings {
     ServerSettings(final Builder builder) {
         heartbeatFrequencyMS = builder.heartbeatFrequencyMS;
         minHeartbeatFrequencyMS = builder.minHeartbeatFrequencyMS;
-        serverListeners = builder.serverListeners;
-        serverMonitorListeners = builder.serverMonitorListeners;
+        serverListeners = unmodifiableList(builder.serverListeners);
+        serverMonitorListeners = unmodifiableList(builder.serverMonitorListeners);
     }
 }

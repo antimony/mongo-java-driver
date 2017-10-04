@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,11 @@ import com.mongodb.binding.ConnectionSource;
 import com.mongodb.binding.ReadBinding;
 import com.mongodb.binding.ReferenceCounted;
 import com.mongodb.binding.WriteBinding;
+import com.mongodb.bulk.DeleteRequest;
+import com.mongodb.bulk.IndexRequest;
+import com.mongodb.bulk.UpdateRequest;
+import com.mongodb.bulk.WriteRequest;
+import com.mongodb.client.model.Collation;
 import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.ConnectionDescription;
@@ -69,39 +74,220 @@ final class OperationHelper {
         void call(AsyncConnectionSource source, AsyncConnection connection, Throwable t);
     }
 
-    static void checkValidReadConcern(final Connection connection, final ReadConcern readConcern) {
+    static void validateReadConcern(final Connection connection, final ReadConcern readConcern) {
         if (!serverIsAtLeastVersionThreeDotTwo(connection.getDescription()) && !readConcern.isServerDefault()) {
-            throw new IllegalArgumentException(format("Unsupported ReadConcern : '%s'", readConcern.asDocument().toJson()));
+            throw new IllegalArgumentException(format("ReadConcern not supported by server version: %s",
+                    connection.getDescription().getServerVersion()));
         }
     }
 
-    static void checkValidReadConcern(final AsyncConnection connection, final ReadConcern readConcern,
-                                      final AsyncCallableWithConnection callable) {
+    static void validateReadConcern(final AsyncConnection connection, final ReadConcern readConcern,
+                                    final AsyncCallableWithConnection callable) {
         Throwable throwable = null;
         if (!serverIsAtLeastVersionThreeDotTwo(connection.getDescription()) && !readConcern.isServerDefault()) {
-            throwable = new IllegalArgumentException(format("Unsupported ReadConcern : '%s'", readConcern.asDocument().toJson()));
+            throwable = new IllegalArgumentException(format("ReadConcern not supported by server version: %s",
+                    connection.getDescription().getServerVersion()));
         }
         callable.call(connection, throwable);
     }
 
-    static void checkValidReadConcern(final AsyncConnectionSource source, final AsyncConnection connection, final ReadConcern readConcern,
-                                      final AsyncCallableWithConnectionAndSource callable) {
-        Throwable throwable = null;
-        if (!serverIsAtLeastVersionThreeDotTwo(connection.getDescription()) && !readConcern.isServerDefault()) {
-            throwable = new IllegalArgumentException(format("Unsupported ReadConcern : '%s'", readConcern.asDocument().toJson()));
+    static void validateReadConcern(final AsyncConnectionSource source, final AsyncConnection connection, final ReadConcern readConcern,
+                                    final AsyncCallableWithConnectionAndSource callable) {
+        validateReadConcern(connection, readConcern, new AsyncCallableWithConnection(){
+            @Override
+            public void call(final AsyncConnection connection, final Throwable t) {
+                callable.call(source, connection, t);
+            }
+        });
+    }
+
+    static void validateCollation(final Connection connection, final Collation collation) {
+        if (!serverIsAtLeastVersionThreeDotFour(connection.getDescription()) && collation != null) {
+            throw new IllegalArgumentException(format("Collation not supported by server version: %s",
+                    connection.getDescription().getServerVersion()));
         }
-        callable.call(source, connection, throwable);
     }
 
-    static boolean bypassDocumentValidationNotSupported(final Boolean bypassDocumentValidation, final WriteConcern writeConcern,
-                                                        final ConnectionDescription description) {
-        return bypassDocumentValidation != null && serverIsAtLeastVersionThreeDotTwo(description) && !writeConcern.isAcknowledged();
+    static void validateCollationAndWriteConcern(final Connection connection, final Collation collation,
+                                                 final WriteConcern writeConcern) {
+        if (!serverIsAtLeastVersionThreeDotFour(connection.getDescription()) && collation != null) {
+            throw new IllegalArgumentException(format("Collation not supported by server version: %s",
+                    connection.getDescription().getServerVersion()));
+        } else if (collation != null && !writeConcern.isAcknowledged()) {
+            throw new MongoClientException("Specifying collation with an unacknowledged WriteConcern is not supported");
+        }
     }
 
-    static MongoClientException getBypassDocumentValidationException() {
-        return new MongoClientException("Specifying bypassDocumentValidation with an unacknowledged WriteConcern "
-                                        + "is not supported");
+    static void validateCollation(final AsyncConnection connection, final Collation collation,
+                                  final AsyncCallableWithConnection callable) {
+        Throwable throwable = null;
+        if (!serverIsAtLeastVersionThreeDotFour(connection.getDescription()) && collation != null) {
+            throwable = new IllegalArgumentException(format("Collation not supported by server version: %s",
+                    connection.getDescription().getServerVersion()));
+        }
+        callable.call(connection, throwable);
     }
+
+    static void validateCollationAndWriteConcern(final AsyncConnection connection, final Collation collation,
+                                                 final WriteConcern writeConcern, final AsyncCallableWithConnection callable) {
+        Throwable throwable = null;
+        if (!serverIsAtLeastVersionThreeDotFour(connection.getDescription()) && collation != null) {
+            throwable = new IllegalArgumentException(format("Collation not supported by server version: %s",
+                    connection.getDescription().getServerVersion()));
+        } else if (collation != null && !writeConcern.isAcknowledged()) {
+            throwable = new MongoClientException("Specifying collation with an unacknowledged WriteConcern is not supported");
+        }
+        callable.call(connection, throwable);
+    }
+
+    static void validateCollation(final AsyncConnectionSource source, final AsyncConnection connection,
+                                  final Collation collation, final AsyncCallableWithConnectionAndSource callable) {
+        validateCollation(connection, collation, new AsyncCallableWithConnection(){
+            @Override
+            public void call(final AsyncConnection connection, final Throwable t) {
+                callable.call(source, connection, t);
+            }
+        });
+    }
+
+    static void validateWriteRequestCollations(final Connection connection, final List<? extends WriteRequest> requests,
+                                                 final WriteConcern writeConcern) {
+        Collation collation = null;
+        for (WriteRequest request : requests) {
+            if (request instanceof UpdateRequest) {
+                collation = ((UpdateRequest) request).getCollation();
+            } else if (request instanceof DeleteRequest) {
+                collation = ((DeleteRequest) request).getCollation();
+            }
+            if (collation != null) {
+                break;
+            }
+        }
+        validateCollationAndWriteConcern(connection, collation, writeConcern);
+    }
+
+    static void validateWriteRequestCollations(final AsyncConnection connection, final List<? extends WriteRequest> requests,
+                                                 final WriteConcern writeConcern, final AsyncCallableWithConnection callable) {
+        Collation collation = null;
+        for (WriteRequest request : requests) {
+            if (request instanceof UpdateRequest) {
+                collation = ((UpdateRequest) request).getCollation();
+            } else if (request instanceof DeleteRequest) {
+                collation = ((DeleteRequest) request).getCollation();
+            }
+            if (collation != null) {
+                break;
+            }
+        }
+        validateCollationAndWriteConcern(connection, collation, writeConcern, new AsyncCallableWithConnection() {
+            @Override
+            public void call(final AsyncConnection connection, final Throwable t) {
+                callable.call(connection, t);
+            }
+        });
+    }
+
+    static void validateWriteRequests(final Connection connection, final Boolean bypassDocumentValidation,
+                                        final List<? extends WriteRequest> requests, final WriteConcern writeConcern) {
+        checkBypassDocumentValidationIsSupported(connection, bypassDocumentValidation, writeConcern);
+        validateWriteRequestCollations(connection, requests, writeConcern);
+    }
+
+    static void validateWriteRequests(final AsyncConnection connection, final Boolean bypassDocumentValidation,
+                                        final List<? extends WriteRequest> requests, final WriteConcern writeConcern,
+                                        final AsyncCallableWithConnection callable) {
+        checkBypassDocumentValidationIsSupported(connection, bypassDocumentValidation, writeConcern, new AsyncCallableWithConnection() {
+            @Override
+            public void call(final AsyncConnection connection, final Throwable t) {
+                if (t != null) {
+                    callable.call(connection, t);
+                } else {
+                    validateWriteRequestCollations(connection, requests, writeConcern, callable);
+                }
+            }
+        });
+    }
+
+    static void validateIndexRequestCollations(final Connection connection, final List<IndexRequest> requests) {
+        for (IndexRequest request : requests) {
+            if (request.getCollation() != null) {
+                validateCollation(connection, request.getCollation());
+                break;
+            }
+        }
+    }
+
+    static void validateIndexRequestCollations(final AsyncConnection connection, final List<IndexRequest> requests,
+                                                 final AsyncCallableWithConnection callable) {
+        boolean calledTheCallable = false;
+        for (IndexRequest request : requests) {
+            if (request.getCollation() != null) {
+                calledTheCallable = true;
+                validateCollation(connection, request.getCollation(), new AsyncCallableWithConnection() {
+                    @Override
+                    public void call(final AsyncConnection connection, final Throwable t) {
+                        callable.call(connection, t);
+                    }
+                });
+                break;
+            }
+        }
+        if (!calledTheCallable) {
+            callable.call(connection, null);
+        }
+    }
+
+    static void validateReadConcernAndCollation(final Connection connection, final ReadConcern readConcern,
+                                                  final Collation collation) {
+        validateReadConcern(connection, readConcern);
+        validateCollation(connection, collation);
+    }
+
+    static void validateReadConcernAndCollation(final AsyncConnection connection, final ReadConcern readConcern,
+                                                  final Collation collation,
+                                                  final AsyncCallableWithConnection callable) {
+        validateReadConcern(connection, readConcern, new AsyncCallableWithConnection(){
+            @Override
+            public void call(final AsyncConnection connection, final Throwable t) {
+                if (t != null) {
+                    callable.call(connection, t);
+                } else {
+                    validateCollation(connection, collation, callable);
+                }
+            }
+        });
+    }
+
+    static void validateReadConcernAndCollation(final AsyncConnectionSource source, final AsyncConnection connection,
+                                                  final ReadConcern readConcern, final Collation collation,
+                                                  final AsyncCallableWithConnectionAndSource callable) {
+        validateReadConcernAndCollation(connection, readConcern, collation, new AsyncCallableWithConnection(){
+            @Override
+            public void call(final AsyncConnection connection, final Throwable t) {
+                callable.call(source, connection, t);
+            }
+        });
+    }
+
+    static void checkBypassDocumentValidationIsSupported(final Connection connection, final Boolean bypassDocumentValidation,
+                                             final WriteConcern writeConcern) {
+        if (bypassDocumentValidation != null && serverIsAtLeastVersionThreeDotTwo(connection.getDescription())
+                && !writeConcern.isAcknowledged()) {
+            throw new MongoClientException("Specifying bypassDocumentValidation with an unacknowledged WriteConcern is not supported");
+        }
+    }
+
+    static void checkBypassDocumentValidationIsSupported(final AsyncConnection connection, final Boolean bypassDocumentValidation,
+                                                         final WriteConcern writeConcern, final AsyncCallableWithConnection callable) {
+        Throwable throwable = null;
+        if (bypassDocumentValidation != null && serverIsAtLeastVersionThreeDotTwo(connection.getDescription())
+                && !writeConcern.isAcknowledged()) {
+            throwable = new MongoClientException("Specifying bypassDocumentValidation with an unacknowledged WriteConcern is "
+                    + "not supported");
+        }
+        callable.call(connection, throwable);
+    }
+
 
     static <T> QueryBatchCursor<T> createEmptyBatchCursor(final MongoNamespace namespace, final Decoder<T> decoder,
                                                           final ServerAddress serverAddress, final int batchSize) {
@@ -110,10 +296,8 @@ final class OperationHelper {
                                        0, batchSize, decoder);
     }
 
-    static <T> AsyncBatchCursor<T> createEmptyAsyncBatchCursor(final MongoNamespace namespace, final Decoder<T> decoder,
-                                                               final ServerAddress serverAddress, final int batchSize) {
-        return new AsyncQueryBatchCursor<T>(new QueryResult<T>(namespace, Collections.<T>emptyList(), 0L, serverAddress), 0, batchSize,
-                decoder);
+    static <T> AsyncBatchCursor<T> createEmptyAsyncBatchCursor(final MongoNamespace namespace, final ServerAddress serverAddress) {
+        return new AsyncSingleBatchQueryCursor<T>(new QueryResult<T>(namespace, Collections.<T>emptyList(), 0L, serverAddress));
     }
 
     static <T> BatchCursor<T> cursorDocumentToBatchCursor(final BsonDocument cursorDocument, final Decoder<T> decoder,
@@ -183,16 +367,20 @@ final class OperationHelper {
         }
     }
 
-    static boolean serverIsAtLeastVersionTwoDotSix(final ConnectionDescription description) {
-        return serverIsAtLeastVersion(description, new ServerVersion(2, 6));
-    }
-
     static boolean serverIsAtLeastVersionThreeDotZero(final ConnectionDescription description) {
-        return serverIsAtLeastVersion(description, new ServerVersion(asList(3, 0, 0)));
+        return serverIsAtLeastVersion(description, new ServerVersion(3, 0));
     }
 
     static boolean serverIsAtLeastVersionThreeDotTwo(final ConnectionDescription description) {
-        return serverIsAtLeastVersion(description, new ServerVersion(asList(3, 1, 9)));
+        return serverIsAtLeastVersion(description, new ServerVersion(3, 2));
+    }
+
+    static boolean serverIsAtLeastVersionThreeDotFour(final ConnectionDescription description) {
+        return serverIsAtLeastVersion(description, new ServerVersion(3, 4));
+    }
+
+    static boolean serverIsAtLeastVersionThreeDotSix(final ConnectionDescription description) {
+        return serverIsAtLeastVersion(description, new ServerVersion(3, 5));
     }
 
     static boolean serverIsAtLeastVersion(final ConnectionDescription description, final ServerVersion serverVersion) {
@@ -258,7 +446,7 @@ final class OperationHelper {
 
     private static class AsyncCallableWithConnectionCallback implements SingleResultCallback<AsyncConnectionSource> {
         private final AsyncCallableWithConnection callable;
-        public AsyncCallableWithConnectionCallback(final AsyncCallableWithConnection callable) {
+        AsyncCallableWithConnectionCallback(final AsyncCallableWithConnection callable) {
             this.callable = callable;
         }
         @Override
@@ -297,7 +485,7 @@ final class OperationHelper {
     private static class AsyncCallableWithConnectionAndSourceCallback implements SingleResultCallback<AsyncConnectionSource> {
         private final AsyncCallableWithConnectionAndSource callable;
 
-        public AsyncCallableWithConnectionAndSourceCallback(final AsyncCallableWithConnectionAndSource callable) {
+        AsyncCallableWithConnectionAndSourceCallback(final AsyncCallableWithConnectionAndSource callable) {
             this.callable = callable;
         }
 

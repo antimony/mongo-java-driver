@@ -24,6 +24,7 @@ import com.mongodb.ReadConcern
 import com.mongodb.async.AsyncBatchCursor
 import com.mongodb.async.FutureResultCallback
 import com.mongodb.async.SingleResultCallback
+import com.mongodb.client.model.Collation
 import com.mongodb.client.model.FindOptions
 import com.mongodb.operation.AsyncOperationExecutor
 import com.mongodb.operation.FindOperation
@@ -49,7 +50,9 @@ class FindIterableSpecification extends Specification {
     def codecRegistry = fromProviders([new ValueCodecProvider(), new DocumentCodecProvider(), new BsonValueCodecProvider()])
     def readPreference = secondary()
     def readConcern = ReadConcern.DEFAULT
+    def collation = Collation.builder().locale('en').build()
 
+    @SuppressWarnings('deprecation')
     def 'should build the expected findOperation'() {
         given:
         def cursor = Stub(AsyncBatchCursor) {
@@ -70,6 +73,15 @@ class FindIterableSpecification extends Specification {
                 .oplogReplay(false)
                 .noCursorTimeout(false)
                 .partial(false)
+                .collation(null)
+                .comment('my comment')
+                .hint(new Document('hint', 1))
+                .min(new Document('min', 1))
+                .max(new Document('max', 1))
+                .maxScan(42L)
+                .returnKey(false)
+                .showRecordId(false)
+                .snapshot(false)
         def findIterable = new FindIterableImpl(namespace, Document, Document, codecRegistry, readPreference, readConcern, executor,
                                                 new Document('filter', 1), findOptions)
 
@@ -92,6 +104,14 @@ class FindIterableSpecification extends Specification {
                 .skip(10)
                 .cursorType(CursorType.NonTailable)
                 .slaveOk(true)
+                .comment('my comment')
+                .hint(new BsonDocument('hint', new BsonInt32(1)))
+                .min(new BsonDocument('min', new BsonInt32(1)))
+                .max(new BsonDocument('max', new BsonInt32(1)))
+                .maxScan(42L)
+                .returnKey(false)
+                .showRecordId(false)
+                .snapshot(false)
         )
         readPreference == secondary()
 
@@ -109,6 +129,15 @@ class FindIterableSpecification extends Specification {
                 .oplogReplay(true)
                 .noCursorTimeout(true)
                 .partial(true)
+                .collation(collation)
+                .comment('alt comment')
+                .hint(new Document('hint', 2))
+                .min(new Document('min', 2))
+                .max(new Document('max', 2))
+                .maxScan(88L)
+                .returnKey(true)
+                .showRecordId(true)
+                .snapshot(true)
                 .into([]) { result, t -> }
 
         operation = executor.getReadOperation() as FindOperation<Document>
@@ -129,6 +158,15 @@ class FindIterableSpecification extends Specification {
                 .noCursorTimeout(true)
                 .partial(true)
                 .slaveOk(true)
+                .collation(collation)
+                .comment('alt comment')
+                .hint(new BsonDocument('hint', new BsonInt32(2)))
+                .min(new BsonDocument('min', new BsonInt32(2)))
+                .max(new BsonDocument('max', new BsonInt32(2)))
+                .maxScan(88L)
+                .returnKey(true)
+                .showRecordId(true)
+                .snapshot(true)
         )
     }
 

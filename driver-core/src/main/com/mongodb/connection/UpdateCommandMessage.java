@@ -25,6 +25,7 @@ import com.mongodb.internal.validator.MappedFieldNameValidator;
 import com.mongodb.internal.validator.NoOpFieldNameValidator;
 import com.mongodb.internal.validator.UpdateFieldNameValidator;
 import org.bson.BsonBinaryWriter;
+import org.bson.BsonDocument;
 import org.bson.FieldNameValidator;
 import org.bson.codecs.EncoderContext;
 import org.bson.io.BsonOutput;
@@ -42,16 +43,7 @@ import java.util.Map;
 class UpdateCommandMessage extends BaseWriteCommandMessage {
     private final List<UpdateRequest> updates;
 
-    /**
-     * Construct an instance.
-     *
-     * @param namespace the namespace
-     * @param ordered whether the writes are ordered
-     * @param writeConcern the write concern
-     * @param settings the message settings
-     * @param updates the list of update requests
-     */
-    public UpdateCommandMessage(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+    UpdateCommandMessage(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                 final Boolean bypassDocumentValidation, final MessageSettings settings, final List<UpdateRequest> updates) {
         super(namespace, ordered, writeConcern, bypassDocumentValidation, settings);
         this.updates = updates;
@@ -91,6 +83,11 @@ class UpdateCommandMessage extends BaseWriteCommandMessage {
             }
             if (update.isUpsert()) {
                 writer.writeBoolean("upsert", update.isUpsert());
+            }
+            if (update.getCollation() != null) {
+                writer.writeName("collation");
+                BsonDocument collation = update.getCollation().asDocument();
+                getCodec(collation).encode(writer, collation, EncoderContext.builder().build());
             }
             writer.popMaxDocumentSize();
             writer.writeEndDocument();

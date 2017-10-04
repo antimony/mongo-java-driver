@@ -15,6 +15,7 @@
  */
 
 apply plugin: 'osgi'
+apply plugin: 'java'
 apply plugin: 'org.kordamp.gradle.clirr'
 
 def configDir = new File(rootDir, 'config')
@@ -22,12 +23,13 @@ archivesBaseName = 'bson'
 
 clirr {
     excludeFilter = new File("$configDir/clirr-exclude.yml")
-    baseline 'org.mongodb:bson:3.2.0'
+    baseline 'org.mongodb:bson:3.4.0'
     failOnErrors = true
 }
 
 jar {
     manifest {
+        instruction 'Build-Version', getGitVersion()
         instruction 'Import-Package',
                     'javax.xml.bind.*',
                     'org.slf4j;resolution:=optional'

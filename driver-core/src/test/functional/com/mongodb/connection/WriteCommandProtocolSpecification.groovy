@@ -20,14 +20,18 @@ package com.mongodb.connection
 import category.Slow
 import com.mongodb.MongoBulkWriteException
 import com.mongodb.OperationFunctionalSpecification
+import com.mongodb.ReadPreference
 import com.mongodb.bulk.BulkWriteUpsert
 import com.mongodb.bulk.InsertRequest
 import com.mongodb.bulk.UpdateRequest
 import com.mongodb.bulk.WriteRequest
 import com.mongodb.connection.netty.NettyStreamFactory
+import com.mongodb.internal.connection.NoOpSessionContext
+import com.mongodb.internal.validator.NoOpFieldNameValidator
 import org.bson.BsonBinary
 import org.bson.BsonDocument
 import org.bson.BsonInt32
+import org.bson.BsonString
 import org.bson.codecs.BsonDocumentCodec
 import org.junit.experimental.categories.Category
 import spock.lang.IgnoreIf
@@ -38,9 +42,9 @@ import static com.mongodb.ClusterFixture.getPrimary
 import static com.mongodb.ClusterFixture.getSslSettings
 import static com.mongodb.ClusterFixture.serverVersionAtLeast
 import static com.mongodb.WriteConcern.ACKNOWLEDGED
+import static com.mongodb.WriteConcern.UNACKNOWLEDGED
 import static com.mongodb.connection.ProtocolTestHelper.execute
 
-@IgnoreIf({ !serverVersionAtLeast([2, 6, 0]) })
 class WriteCommandProtocolSpecification extends OperationFunctionalSpecification {
 
     @Shared
@@ -48,7 +52,7 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
 
     def setupSpec() {
         connection = new InternalStreamConnectionFactory(new NettyStreamFactory(SocketSettings.builder().build(), getSslSettings()),
-                getCredentialList(), new NoOpConnectionListener())
+                getCredentialList(), null, null, [], null)
                 .create(new ServerId(new ClusterId(), getPrimary()))
         connection.open();
     }
@@ -63,6 +67,7 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
 
         def insertRequest = [new InsertRequest(document)]
         def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null, insertRequest)
+        protocol.sessionContext(NoOpSessionContext.INSTANCE)
 
         when:
         def result = execute(protocol, connection, async)
@@ -81,6 +86,7 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
                         new InsertRequest(new BsonDocument('_id', new BsonInt32(2)))]
         given:
         def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null, requests)
+        protocol.sessionContext(NoOpSessionContext.INSTANCE)
 
         when:
         execute(protocol, connection, async)
@@ -98,6 +104,7 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
                 [new InsertRequest(new BsonDocument('_id', new BsonInt32(1))),
                  new InsertRequest(new BsonDocument('_id', new BsonInt32(2)))]
         )
+        protocol.sessionContext(NoOpSessionContext.INSTANCE)
         protocol.execute(connection)
 
         when:
@@ -142,6 +149,7 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
             insertList.add(new InsertRequest(cur));
         }
         def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null, insertList)
+        protocol.sessionContext(NoOpSessionContext.INSTANCE)
 
         when:
         def result = execute(protocol, connection, async)
@@ -173,9 +181,11 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
 
         // Force a duplicate key error in the second insert request
         new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null, [new InsertRequest(new BsonDocument('_id', new BsonInt32(2)))])
+                .sessionContext(NoOpSessionContext.INSTANCE)
                 .execute(connection)
 
         def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null, insertList)
+                .sessionContext(NoOpSessionContext.INSTANCE)
 
         when:
         execute(protocol, connection, async)
@@ -204,7 +214,9 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
         for (def cur : documents) {
             insertList.add(new InsertRequest(cur));
         }
-        new InsertCommandProtocol(getNamespace(), false, ACKNOWLEDGED, null, insertList).execute(connection)
+        new InsertCommandProtocol(getNamespace(), false, ACKNOWLEDGED, null, insertList)
+                .sessionContext(NoOpSessionContext.INSTANCE)
+                .execute(connection)
 
         // add a large byte array to each document to force a split after each
         for (def document : documents) {
@@ -213,6 +225,7 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
         documents[1].put('_id', new BsonInt32(5))  // Make the second document a new one
 
         def protocol = new InsertCommandProtocol(getNamespace(), false, ACKNOWLEDGED, null, insertList)
+                .sessionContext(NoOpSessionContext.INSTANCE)
 
         when:
         execute(protocol, connection, async)
@@ -241,6 +254,7 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
                          WriteRequest.Type.UPDATE)
                          .upsert(true)]
         );
+        protocol.sessionContext(NoOpSessionContext.INSTANCE)
 
         when:
         def result = execute(protocol, connection, async)
@@ -249,6 +263,39 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
         then:
         result.matchedCount == 0;
         result.upserts == [new BulkWriteUpsert(0, new BsonInt32(1)), new BulkWriteUpsert(1, new BsonInt32(2))]
+
+        where:
+        async << [false, true]
+    }
+
+    @IgnoreIf({ !serverVersionAtLeast(3, 5) })
+    def 'should ignore write errors on unacknowledged inserts'() {
+        given:
+        def documentOne = new BsonDocument('_id', new BsonInt32(1))
+        def documentTwo = new BsonDocument('_id', new BsonInt32(2))
+        def documentThree = new BsonDocument('_id', new BsonInt32(3))
+        def documentFour = new BsonDocument('_id', new BsonInt32(4))
+
+        def insertRequest = [new InsertRequest(documentOne), new InsertRequest(documentTwo),
+                             new InsertRequest(documentThree), new InsertRequest(documentFour)]
+        def protocol = new InsertCommandProtocol(getNamespace(), true, UNACKNOWLEDGED, false, insertRequest)
+                .sessionContext(NoOpSessionContext.INSTANCE)
+
+        getCollectionHelper().insertDocuments(documentOne)
+
+        when:
+        execute(protocol, connection, async)
+
+        then:
+        getCollectionHelper().find(new BsonDocumentCodec()) == [documentOne]
+
+        cleanup:
+        // force acknowledgement
+        new SimpleCommandProtocol(getDatabaseName(), new BsonDocument('drop', new BsonString(getCollectionName())),
+                new NoOpFieldNameValidator(), new BsonDocumentCodec())
+                .sessionContext(NoOpSessionContext.INSTANCE)
+                .readPreference(ReadPreference.primary())
+                .execute(connection)
 
         where:
         async << [false, true]

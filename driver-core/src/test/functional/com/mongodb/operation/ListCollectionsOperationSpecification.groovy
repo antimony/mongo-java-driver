@@ -54,7 +54,6 @@ import static com.mongodb.ClusterFixture.executeAsync
 import static com.mongodb.ClusterFixture.getBinding
 import static com.mongodb.ClusterFixture.isSharded
 import static com.mongodb.ClusterFixture.serverVersionAtLeast
-import static java.util.Arrays.asList
 import static java.util.concurrent.TimeUnit.MILLISECONDS
 
 class ListCollectionsOperationSpecification extends OperationFunctionalSpecification {
@@ -86,7 +85,15 @@ class ListCollectionsOperationSpecification extends OperationFunctionalSpecifica
         cursor.next(callback)
 
         then:
-        !callback.get()
+        callback.get() == null
+
+        when:
+        cursor = executeAsync(operation)
+        callback = new FutureResultCallback()
+        cursor.tryNext(callback)
+
+        then:
+        callback.get() == null
 
         cleanup:
         collectionHelper.dropDatabase(madeUpDatabase)
@@ -112,7 +119,7 @@ class ListCollectionsOperationSpecification extends OperationFunctionalSpecifica
         names.findAll { it.contains('$') }.isEmpty()
     }
 
-    @IgnoreIf({ serverVersionAtLeast(asList(3, 0, 0)) })
+    @IgnoreIf({ serverVersionAtLeast(3, 0) })
     def 'should throw if filtering on name with something other than a string'() {
         given:
         def operation = new ListCollectionsOperation(databaseName, new DocumentCodec())
@@ -336,7 +343,7 @@ class ListCollectionsOperationSpecification extends OperationFunctionalSpecifica
         cursor.getBatchSize() == 2
     }
 
-    @IgnoreIf({ isSharded() || !serverVersionAtLeast([2, 6, 0]) })
+    @IgnoreIf({ isSharded() })
     def 'should throw execution timeout exception from execute'() {
         given:
         getCollectionHelper().insertDocuments(new DocumentCodec(), new Document())
@@ -355,7 +362,7 @@ class ListCollectionsOperationSpecification extends OperationFunctionalSpecifica
     }
 
     @Category(Async)
-    @IgnoreIf({ isSharded() || !serverVersionAtLeast([2, 6, 0]) })
+    @IgnoreIf({ isSharded() })
     def 'should throw execution timeout exception from executeAsync'() {
         given:
         getCollectionHelper().insertDocuments(new DocumentCodec(), new Document())
@@ -398,7 +405,7 @@ class ListCollectionsOperationSpecification extends OperationFunctionalSpecifica
 
         then:
         _ * connection.getDescription() >> helper.threeZeroConnectionDescription
-        1 * connection.command(_, _, readPreference.isSlaveOk(), _, _) >> helper.commandResult
+        1 * connection.command(_, _, readPreference, _, _, _) >> helper.commandResult
         1 * connection.release()
 
         where:
@@ -430,7 +437,7 @@ class ListCollectionsOperationSpecification extends OperationFunctionalSpecifica
 
         then:
         _ * connection.getDescription() >> helper.threeZeroConnectionDescription
-        1 * connection.commandAsync(helper.dbName, _, readPreference.isSlaveOk(), _, _, _) >> { it[6].onResult(helper.commandResult, _) }
+        1 * connection.commandAsync(helper.dbName, _, readPreference, _, _, _, _) >> { it[6].onResult(helper.commandResult, null) }
 
         where:
         readPreference << [ReadPreference.primary(), ReadPreference.secondary()]

@@ -48,11 +48,9 @@ import static com.mongodb.ClusterFixture.executeAsync
 import static com.mongodb.ClusterFixture.getBinding
 import static com.mongodb.ClusterFixture.isSharded
 import static com.mongodb.ClusterFixture.loopCursor
-import static com.mongodb.ClusterFixture.serverVersionAtLeast
-import static java.util.Arrays.asList
 import static org.junit.Assert.assertTrue
 
-@IgnoreIf({ isSharded() || !serverVersionAtLeast(asList(2, 6, 0)) })
+@IgnoreIf({ isSharded() })
 @Category(Slow)
 class ParallelCollectionScanOperationSpecification extends OperationFunctionalSpecification {
     Map<Integer, Boolean> ids = [] as ConcurrentHashMap
@@ -140,7 +138,7 @@ class ParallelCollectionScanOperationSpecification extends OperationFunctionalSp
 
         then:
         _ * connection.getDescription() >> helper.connectionDescription
-        1 * connection.command(helper.dbName, _, readPreference.isSlaveOk(), _, _) >> helper.commandResult
+        1 * connection.command(helper.dbName, _, readPreference, _, _, _) >> helper.commandResult
         1 * connection.release()
 
         where:
@@ -164,8 +162,8 @@ class ParallelCollectionScanOperationSpecification extends OperationFunctionalSp
 
         then:
         _ * connection.getDescription() >> helper.connectionDescription
-        1 * connection.commandAsync(helper.dbName, _, readPreference.isSlaveOk(), _, _, _) >> {
-            it[5].onResult(helper.commandResult, null) }
+        1 * connection.commandAsync(helper.dbName, _, readPreference, _, _, _, _) >> {
+            it[6].onResult(helper.commandResult, null) }
         1 * connection.release()
 
         where:
@@ -194,7 +192,7 @@ class ParallelCollectionScanOperationSpecification extends OperationFunctionalSp
         operation.execute(readBinding)
 
         then:
-        1 * connection.command(helper.dbName, expectedCommand, _, _, _) >> { helper.commandResult }
+        1 * connection.command(helper.dbName, expectedCommand, _, _, _, _) >> { helper.commandResult }
         1 * connection.release()
 
         when:
@@ -204,7 +202,7 @@ class ParallelCollectionScanOperationSpecification extends OperationFunctionalSp
         operation.execute(readBinding)
 
         then:
-        1 * connection.command(helper.dbName, expectedCommand, _, _, _) >> { helper.commandResult }
+        1 * connection.command(helper.dbName, expectedCommand, _, _, _, _) >> { helper.commandResult }
         1 * connection.release()
     }
 
@@ -229,7 +227,7 @@ class ParallelCollectionScanOperationSpecification extends OperationFunctionalSp
         operation.executeAsync(readBinding, Stub(SingleResultCallback))
 
         then:
-        1 * connection.commandAsync(helper.dbName, expectedCommand, _, _, _, _) >> { it[5].onResult(helper.commandResult, null) }
+        1 * connection.commandAsync(helper.dbName, expectedCommand, _, _, _, _, _) >> { it[6].onResult(helper.commandResult, null) }
         1 * connection.release()
 
         when:
@@ -239,7 +237,7 @@ class ParallelCollectionScanOperationSpecification extends OperationFunctionalSp
         operation.executeAsync(readBinding, Stub(SingleResultCallback))
 
         then:
-        1 * connection.commandAsync(helper.dbName, expectedCommand, _, _, _, _) >> { it[5].onResult(helper.commandResult, null) }
+        1 * connection.commandAsync(helper.dbName, expectedCommand, _, _, _, _, _) >> { it[6].onResult(helper.commandResult, null) }
         1 * connection.release()
     }
 

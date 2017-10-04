@@ -32,7 +32,9 @@ import static java.lang.String.format;
  * A multicaster for server events.
  *
  * @since 3.3
+ * @deprecated register multiple server monitor listeners instead
  */
+@Deprecated
 public final class ServerMonitorEventMulticaster implements ServerMonitorListener {
     private static final Logger LOGGER = Loggers.getLogger("cluster.event");
 

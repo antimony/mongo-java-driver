@@ -16,7 +16,6 @@
 
 package com.mongodb.connection
 
-import com.mongodb.MongoSocketOpenException
 import com.mongodb.MongoSocketReadTimeoutException
 import com.mongodb.ServerAddress
 import com.mongodb.event.ServerHeartbeatFailedEvent
@@ -31,84 +30,10 @@ import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-import static com.mongodb.connection.MessageHelper.buildSuccessfulReply
-
 @SuppressWarnings('BusyWait')
 class DefaultServerMonitorSpecification extends Specification {
 
     DefaultServerMonitor monitor
-
-    def 'A thread interrupt should send a sendStateChangedEvent'() {
-        given:
-        def stateChanged = false
-        def latch = new CountDownLatch(1);
-        def changeListener = new ChangeListener<ServerDescription>() {
-            @Override
-            void stateChanged(final ChangeEvent<ServerDescription> event) {
-                stateChanged = true;
-                latch.countDown()
-            }
-        }
-        def internalConnectionFactory = Mock(InternalConnectionFactory) {
-            create(_) >> {
-                Mock(InternalConnection) {
-                    open() >> { throw new MongoSocketOpenException('open', new ServerAddress(), new IOException()) }
-                }
-            }
-        }
-        monitor = new DefaultServerMonitor(new ServerId(new ClusterId(), new ServerAddress()),
-                ServerSettings.builder().addServerListener(new NoOpServerListener()).build(),
-                changeListener, internalConnectionFactory, new TestConnectionPool())
-        monitor.start()
-
-        when:
-        monitor.monitorThread.interrupt()
-        latch.await()
-
-        then:
-        stateChanged
-
-        cleanup:
-        monitor?.close()
-    }
-
-    def 'invalidate should not send a sendStateChangedEvent'() {
-        given:
-        def stateChanged = false
-        def changeListener = new ChangeListener<ServerDescription>() {
-            @Override
-            void stateChanged(final ChangeEvent<ServerDescription> event) {
-                stateChanged = true;
-            }
-        }
-        def latch = new CountDownLatch(1)
-        def internalConnectionFactory = Mock(InternalConnectionFactory) {
-            create(_) >> {
-                Mock(InternalConnection) {
-                    open() >> {
-                        latch.countDown()
-                        Thread.sleep(Long.MAX_VALUE);
-                    }
-                }
-            }
-        }
-        monitor = new DefaultServerMonitor(new ServerId(new ClusterId(), new ServerAddress()),
-                ServerSettings.builder().addServerListener(new NoOpServerListener()).build(),
-                changeListener, internalConnectionFactory, new TestConnectionPool())
-        monitor.start()
-        def monitorThread = monitor.monitorThread
-        latch.await()
-
-        when:
-        monitor.invalidate()
-        monitorThread.join();
-
-        then:
-        !stateChanged
-
-        cleanup:
-        monitor?.close()
-    }
 
     def 'close should not send a sendStateChangedEvent'() {
         given:
@@ -116,24 +41,23 @@ class DefaultServerMonitorSpecification extends Specification {
         def changeListener = new ChangeListener<ServerDescription>() {
             @Override
             void stateChanged(final ChangeEvent<ServerDescription> event) {
-                stateChanged = true;
+                stateChanged = true
             }
         }
         def internalConnectionFactory = Mock(InternalConnectionFactory) {
             create(_) >> {
                 Mock(InternalConnection) {
-                    open() >> { sleep(100); }
+                    open() >> { sleep(100) }
                 }
             }
         }
-        monitor = new DefaultServerMonitor(new ServerId(new ClusterId(), new ServerAddress()),
-                ServerSettings.builder().addServerListener(new NoOpServerListener()).build(), changeListener, internalConnectionFactory,
-                new TestConnectionPool())
+        monitor = new DefaultServerMonitor(new ServerId(new ClusterId(), new ServerAddress()), ServerSettings.builder().build(),
+                changeListener, internalConnectionFactory, new TestConnectionPool())
         monitor.start()
 
         when:
         monitor.close()
-        monitor.monitorThread.join();
+        monitor.monitorThread.join()
 
         then:
         !stateChanged
@@ -149,8 +73,8 @@ class DefaultServerMonitorSpecification extends Specification {
 
         def latch = new CountDownLatch(1)
         def startedEvent
-        def succeededEvent;
-        def failedEvent;
+        def succeededEvent
+        def failedEvent
 
         def serverMonitorListener = new ServerMonitorListener() {
             @Override
@@ -199,8 +123,8 @@ class DefaultServerMonitorSpecification extends Specification {
 
                     sendMessage(_, _) >> { }
 
-                    receiveMessage(_) >> { int responseTo ->
-                        buildSuccessfulReply(responseTo, isMasterResponse)
+                    sendAndReceive(_, _, _) >> {
+                        BsonDocument.parse(isMasterResponse)
                     }
                 }
             }
@@ -234,8 +158,8 @@ class DefaultServerMonitorSpecification extends Specification {
 
         def latch = new CountDownLatch(1)
         def startedEvent
-        def succeededEvent;
-        def failedEvent;
+        def succeededEvent
+        def failedEvent
 
         def serverMonitorListener = new ServerMonitorListener() {
             @Override
@@ -272,9 +196,7 @@ class DefaultServerMonitorSpecification extends Specification {
                         connectionDescription
                     }
 
-                    sendMessage(_, _) >> { }
-
-                    receiveMessage(_) >> {
+                    sendAndReceive(_, _, _) >> {
                         throw exception
                     }
                 }

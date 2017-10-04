@@ -18,6 +18,7 @@ package com.mongodb
 
 import com.mongodb.event.ClusterListener
 import com.mongodb.event.CommandListener
+import com.mongodb.event.ConnectionPoolListener
 import com.mongodb.event.ServerListener
 import com.mongodb.event.ServerMonitorListener
 import org.bson.Document
@@ -25,17 +26,48 @@ import org.bson.Document
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+import static com.mongodb.Fixture.getMongoClientURI
 import static com.mongodb.Fixture.mongoClientURI
 
 class MongoClientListenerRegistrationSpecification extends FunctionalSpecification {
 
+    def 'should register event listeners'() {
+        given:
+        def clusterListener = Mock(ClusterListener) {
+            (1.._) * _
+        }
+        def commandListener = Mock(CommandListener) {
+            (1.._) * _
+        }
+        def connectionPoolListener = Mock(ConnectionPoolListener) {
+            (1.._) * _
+        }
+        def serverListener = Mock(ServerListener) {
+            (1.._) * _
+        }
+        def serverMonitorListener = Mock(ServerMonitorListener) {
+            (1.._) * _
+        }
+
+        when:
+        def optionBuilder = MongoClientOptions.builder(mongoClientURI.options)
+                .addClusterListener(clusterListener)
+                .addCommandListener(commandListener)
+                .addConnectionPoolListener(connectionPoolListener)
+                .addServerListener(serverListener)
+                .addServerMonitorListener(serverMonitorListener)
+        def client = new MongoClient(getMongoClientURI(optionBuilder))
+
+        then:
+        client.getDatabase('admin').runCommand(new Document('ping', 1))
+    }
+
     def 'should register single command listener'() {
         given:
         def first = Mock(CommandListener)
-        def client = new MongoClient(mongoClientURI.getHosts().collect { new ServerAddress(it) },
-                MongoClientOptions.builder(mongoClientURI.options)
-                                                       .addCommandListener(first)
-                                                       .build());
+        def optionsBuilder = MongoClientOptions.builder(mongoClientURI.options)
+                .addCommandListener(first)
+        def client = new MongoClient(getMongoClientURI(optionsBuilder))
 
         when:
         client.getDatabase('admin').runCommand(new Document('ping', 1))
@@ -49,10 +81,10 @@ class MongoClientListenerRegistrationSpecification extends FunctionalSpecificati
         given:
         def first = Mock(CommandListener)
         def second = Mock(CommandListener)
-        def client = new MongoClient(mongoClientURI.getHosts().collect { new ServerAddress(it) },
-                                     MongoClientOptions.builder(mongoClientURI.options)
-                                                       .addCommandListener(first)
-                                                       .addCommandListener(second).build());
+        def optionsBuilder = MongoClientOptions.builder(mongoClientURI.options)
+                .addCommandListener(first)
+                .addCommandListener(second)
+        def client = new MongoClient(getMongoClientURI(optionsBuilder));
 
         when:
         client.getDatabase('admin').runCommand(new Document('ping', 1))
@@ -81,12 +113,11 @@ class MongoClientListenerRegistrationSpecification extends FunctionalSpecificati
             }
         }
 
-        def client = new MongoClient(mongoClientURI.getHosts().collect { new ServerAddress(it) },
-                MongoClientOptions.builder(mongoClientURI.options)
-                        .addClusterListener(clusterListener)
-                        .addServerListener(serverListener)
-                        .addServerMonitorListener(serverMonitorListener)
-                        .build());
+        def optionsBuilder = MongoClientOptions.builder(mongoClientURI.options)
+                .addClusterListener(clusterListener)
+                .addServerListener(serverListener)
+                .addServerMonitorListener(serverMonitorListener)
+        def client = new MongoClient(getMongoClientURI(optionsBuilder));
 
         when:
         def finished = latch.await(5, TimeUnit.SECONDS)
@@ -128,15 +159,14 @@ class MongoClientListenerRegistrationSpecification extends FunctionalSpecificati
             }
         }
 
-        def client = new MongoClient(mongoClientURI.getHosts().collect { new ServerAddress(it) },
-                MongoClientOptions.builder(mongoClientURI.options)
-                        .addClusterListener(clusterListener)
-                        .addServerListener(serverListener)
-                        .addServerMonitorListener(serverMonitorListener)
-                        .addClusterListener(clusterListenerTwo)
-                        .addServerListener(serverListenerTwo)
-                        .addServerMonitorListener(serverMonitorListenerTwo)
-                        .build());
+        def optionsBuilder = MongoClientOptions.builder(mongoClientURI.options)
+                .addClusterListener(clusterListener)
+                .addServerListener(serverListener)
+                .addServerMonitorListener(serverMonitorListener)
+                .addClusterListener(clusterListenerTwo)
+                .addServerListener(serverListenerTwo)
+                .addServerMonitorListener(serverMonitorListenerTwo)
+        def client = new MongoClient(getMongoClientURI(optionsBuilder));
 
         when:
         def finished = latch.await(5, TimeUnit.SECONDS)

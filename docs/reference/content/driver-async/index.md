@@ -9,13 +9,26 @@ title = "MongoDB Async Driver"
 
 ## MongoDB Async Java Driver Documentation
 
-Welcome to the MongoDB Async Java driver documentation hub.
+The following guide provides information on using the callback-based MongoDB Async Java Driver 3.6.
 
-### Getting Started
+{{% note %}}
+There are two higher level MongoDB Asynchronous Java Drivers available, that users may find easier to work with due to their friendlier APIs:
 
-The [Getting Started]({{< relref "driver-async/getting-started/index.md" >}}) guide contains installation instructions
-and a simple tutorial to get up  and running quickly.
+* [MongoDB RxJava Driver](http://mongodb.github.io/mongo-java-driver-rx/) An RxJava implementation of the MongoDB Driver.
+* [MongoDB Reactive Streams Java Driver](http://mongodb.github.io/mongo-java-driver-reactivestreams/) A Reactive Streams implementation for the JVM.
+{{% /note %}}
 
-### Reference
+### What's New in 3.6
 
-For more detailed documentation, see the [Reference]({{< relref "driver-async/reference/index.md" >}}) guide.
+The [What's New]({{< relref "whats-new.md" >}}) guide explains the major new features of the driver.
+
+If you are upgrading from the 2.x series of the driver, consult the [Upgrading]({{< relref "upgrading.md" >}}) documentation for
+information on breaking changes.
+
+## Getting Started
+
+To get started, see the [Installation Guide]({{< relref "driver-async/getting-started/installation.md" >}}), the [Quick Start Guide]({{< relref "driver-async/getting-started/quick-start.md" >}}) and the [Quick Start with POJOs Guide]({{< relref "driver-async/getting-started/quick-start-pojo.md" >}})..
+
+## Tutorials
+
+For tutorials for some frequently used operations, see the [Tutorials section]({{<relref "driver-async/tutorials/index.md">}}).
